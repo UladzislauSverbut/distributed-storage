@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 )
@@ -8,11 +9,14 @@ import (
 const HEADER_SIZE = 4
 
 const (
-	BNODE_INTERNAL uint16 = iota
+	BNODE_INTERNAL BNodeType = iota
 	BNODE_LEAF
 )
 
+type BNodeType = uint16
 type BNodePointer = uint64
+type BNodeKeyValueSequenceNumber = uint16
+type BNodeChildSequenceNumber = uint16
 
 /*
 	Node Format
@@ -30,107 +34,132 @@ func (node *BNode) getType() uint16 {
 	return binary.LittleEndian.Uint16(node.data[0:2])
 }
 
-func (node *BNode) getNumberOfStoredKeys() uint16 {
+func (node *BNode) getStoredKeysNumber() uint16 {
 	return binary.LittleEndian.Uint16(node.data[2:4])
 }
 
-func (node *BNode) setHeader(nodeType uint16, numberOfKeys uint16) {
+func (node *BNode) setHeader(nodeType BNodeType, numberOfKeys uint16) {
 	binary.LittleEndian.PutUint16(node.data[0:2], nodeType)
 	binary.LittleEndian.PutUint16(node.data[2:4], numberOfKeys)
 }
 
-func (node *BNode) getChildPointer(childIndex uint16) (BNodePointer, error) {
-	if childIndex >= node.getNumberOfStoredKeys() {
-		return 0, fmt.Errorf("BNode doesnt store child with index %d", childIndex)
+func (node *BNode) getChildPointer(childSequenceNumber BNodeChildSequenceNumber) (BNodePointer, error) {
+	if childSequenceNumber >= node.getStoredKeysNumber() {
+		return 0, fmt.Errorf("BNode doesnt store child with index %d", childSequenceNumber)
 	}
 
-	childPosition := childIndex + HEADER_SIZE
+	childPointerAddress := childSequenceNumber + HEADER_SIZE
 
-	return binary.LittleEndian.Uint64(node.data[childPosition:]), nil
+	return binary.LittleEndian.Uint64(node.data[childPointerAddress:]), nil
 }
 
-func (node *BNode) setChildPointer(childIndex uint16, pointer BNodePointer) error {
-	if childIndex >= node.getNumberOfStoredKeys() {
-		return fmt.Errorf("BNode doesnt store child with index %d", childIndex)
+func (node *BNode) setChildPointer(childSequenceNumber BNodeChildSequenceNumber, pointer BNodePointer) error {
+	if childSequenceNumber >= node.getStoredKeysNumber() {
+		return fmt.Errorf("BNode doesnt store child with index %d", childSequenceNumber)
 	}
 
-	childPosition := childIndex + HEADER_SIZE
+	childPointerAddress := childSequenceNumber + HEADER_SIZE
 
-	binary.LittleEndian.PutUint64(node.data[childPosition:], pointer)
+	binary.LittleEndian.PutUint64(node.data[childPointerAddress:], pointer)
 
 	return nil
 }
 
-func (node *BNode) getKeyValueOffset(keyValueIndex uint16) (uint16, error) {
-	if keyValueIndex >= node.getNumberOfStoredKeys() {
-		return 0, fmt.Errorf("BNode doesnt store key-value with index %d", keyValueIndex)
+func (node *BNode) getKeyValueOffset(keyValueSequenceNumber BNodeKeyValueSequenceNumber) (uint16, error) {
+	if keyValueSequenceNumber >= node.getStoredKeysNumber() {
+		return 0, fmt.Errorf("BNode doesnt store key-value with index %d", keyValueSequenceNumber)
 	}
 
-	if keyValueIndex == 0 {
+	if keyValueSequenceNumber == 0 {
 		return 0, nil
 	}
 
-	offsetPosition := HEADER_SIZE + node.getNumberOfStoredKeys()*8 + (keyValueIndex-1)*2
+	offsetAddress := HEADER_SIZE + node.getStoredKeysNumber()*8 + (keyValueSequenceNumber-1)*2
 
-	return binary.LittleEndian.Uint16(node.data[offsetPosition:]), nil
+	return binary.LittleEndian.Uint16(node.data[offsetAddress:]), nil
 }
 
-func (node *BNode) setKeyValueOffset(keyValueIndex uint16, keyValueOffset uint16) error {
-	if keyValueIndex >= node.getNumberOfStoredKeys() {
-		return fmt.Errorf("BNode doesnt store key-value with index %d", keyValueIndex)
+func (node *BNode) setKeyValueOffset(keyValueSequenceNumber BNodeKeyValueSequenceNumber, keyValueOffset uint16) error {
+	if keyValueSequenceNumber >= node.getStoredKeysNumber() {
+		return fmt.Errorf("BNode doesnt store key-value with index %d", keyValueSequenceNumber)
 	}
 
-	if keyValueIndex == 0 {
+	if keyValueSequenceNumber == 0 {
 		return fmt.Errorf("BNode doesnt store offset for first key-value because its always 0")
 	}
 
-	offsetPosition := HEADER_SIZE + node.getNumberOfStoredKeys()*8 + keyValueIndex*2
+	offsetAddress := HEADER_SIZE + node.getStoredKeysNumber()*8 + keyValueSequenceNumber*2
 
-	binary.LittleEndian.PutUint16(node.data[offsetPosition:], keyValueOffset)
+	binary.LittleEndian.PutUint16(node.data[offsetAddress:], keyValueOffset)
 
 	return nil
 }
 
-func (node *BNode) getKeyValuePosition(keyValueIndex uint16) (uint16, error) {
-	keyValueOffset, err := node.getKeyValueOffset(keyValueIndex)
+func (node *BNode) getKeyValueAddress(keyValueSequenceNumber BNodeKeyValueSequenceNumber) (uint16, error) {
+	keyValueOffset, err := node.getKeyValueOffset(keyValueSequenceNumber)
 
 	if err != nil {
 		return 0, err
 	}
 
-	return HEADER_SIZE + (8+2)*node.getNumberOfStoredKeys() + keyValueOffset, nil
+	return HEADER_SIZE + (8+2)*node.getStoredKeysNumber() + keyValueOffset, nil
 }
 
-func (node *BNode) getKey(keyValueIndex uint16) ([]byte, error) {
-	keyValuePosition, err := node.getKeyValuePosition(keyValueIndex)
+func (node *BNode) calculateKeyValueSequenceNumber(key []byte) (BNodeKeyValueSequenceNumber, error) {
+	storedKeysNumber := node.getStoredKeysNumber()
+	// we find the sequence number of new key-value record by comparing keys with passed key
+	// position of last key that is less or equal than passed key returns
+	// by default sequence number is 0 because we visited this node from the internal parent that contains the same key
+	// thus first stored key is always less or equal to passed
+	sequenceNumber := BNodeKeyValueSequenceNumber(0)
+
+	for keySequenceNumber := BNodeKeyValueSequenceNumber(1); keySequenceNumber < storedKeysNumber; keySequenceNumber++ {
+		storedKey, err := node.getKey(keySequenceNumber)
+
+		if err != nil {
+			return 0, err
+		}
+
+		if bytes.Compare(key, storedKey) >= 0 {
+			sequenceNumber = keySequenceNumber
+		} else {
+			break
+		}
+	}
+
+	return sequenceNumber, nil
+}
+
+func (node *BNode) getKey(keyValueSequenceNumber BNodeKeyValueSequenceNumber) ([]byte, error) {
+	KeyValueAddress, err := node.getKeyValueAddress(keyValueSequenceNumber)
 
 	if err != nil {
 		return nil, err
 	}
 
-	keyLength := binary.LittleEndian.Uint16(node.data[keyValuePosition:])
+	keyLength := binary.LittleEndian.Uint16(node.data[KeyValueAddress:])
 
-	return node.data[keyValuePosition+2+2:][:keyLength], nil
+	return node.data[KeyValueAddress+2+2:][:keyLength], nil
 }
 
-func (node *BNode) getValue(keyValueIndex uint16) ([]byte, error) {
-	keyValuePosition, err := node.getKeyValuePosition(keyValueIndex)
+func (node *BNode) getValue(keyValueSequenceNumber BNodeKeyValueSequenceNumber) ([]byte, error) {
+	keyValueAddress, err := node.getKeyValueAddress(keyValueSequenceNumber)
 
 	if err != nil {
 		return nil, err
 	}
 
-	keyLength := binary.LittleEndian.Uint16(node.data[keyValuePosition:])
-	valueLength := binary.LittleEndian.Uint16(node.data[keyValuePosition+2:])
+	keyLength := binary.LittleEndian.Uint16(node.data[keyValueAddress:])
+	valueLength := binary.LittleEndian.Uint16(node.data[keyValueAddress+2:])
 
-	return node.data[keyValuePosition+2+2+keyLength:][:valueLength], nil
+	return node.data[keyValueAddress+2+2+keyLength:][:valueLength], nil
 }
 
 func (node *BNode) getSizeInBytes() uint16 {
-	// we store offset to the end of last key-value pair as size of node
-	offsetPosition := HEADER_SIZE + node.getNumberOfStoredKeys()*8 + (node.getNumberOfStoredKeys()-1)*2
+	// we store offset of the end of last key-value pair as size of node
+	offsetAddress := HEADER_SIZE + node.getStoredKeysNumber()*8 + (node.getStoredKeysNumber()-1)*2
 
-	offset := binary.LittleEndian.Uint16(node.data[offsetPosition:])
+	offset := binary.LittleEndian.Uint16(node.data[offsetAddress:])
 
-	return HEADER_SIZE + (8+2)*node.getNumberOfStoredKeys() + offset
+	return HEADER_SIZE + (8+2)*node.getStoredKeysNumber() + offset
 }
