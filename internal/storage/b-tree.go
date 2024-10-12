@@ -1,7 +1,7 @@
 package storage
 
 type BTree struct {
-	root   BNodePointer
+	root   BNode
 	get    func(BNodePointer) *BNode
 	create func(*BNode) BNodePointer
 	delete func(BNodePointer)
