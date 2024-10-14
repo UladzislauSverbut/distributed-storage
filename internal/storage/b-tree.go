@@ -1,10 +1,45 @@
 package storage
 
-import "bytes"
+import (
+	"bytes"
+	"log"
+)
 
 const BTREE_PAGE_SIZE = 4096
 
 type BTree struct {
+}
+
+func (tree *BTree) setKeyValue(node *BNode, key []byte, value []byte) *BNode {
+	keyPosition := tree.getLessOrEqualKeyPosition(node, key)
+
+	switch node.GetType() {
+	case BNODE_LEAF:
+		{
+			storedKeyAtSamePosition, _ := node.GetKey(keyPosition)
+
+			if bytes.Equal(key, storedKeyAtSamePosition) {
+				return tree.updateKeyValue(node, keyPosition, key, value)
+			} else {
+				return tree.insertKeyValue(node, keyPosition, key, value)
+			}
+		}
+	default:
+		log.Printf("Unsupported node type %s", node.GetType())
+		return node
+	}
+
+}
+
+func (tree *BTree) updateKeyValue(node *BNode, position BNodeKeyPosition, key []byte, value []byte) *BNode {
+	newNode := &BNode{data: make([]byte, 2*BTREE_PAGE_SIZE)}
+	newNode.SetHeader(BNODE_LEAF, node.GetStoredKeysNumber())
+
+	newNode.Copy(node, 0, 0, position-1)
+	newNode.AppendKeyValue(key, value)
+	newNode.Copy(node, position+1, position+1, node.GetStoredKeysNumber()-position)
+
+	return newNode
 }
 
 func (tree *BTree) insertKeyValue(node *BNode, position BNodeKeyPosition, key []byte, value []byte) *BNode {
