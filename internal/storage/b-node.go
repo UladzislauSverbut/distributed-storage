@@ -8,7 +8,7 @@ import (
 const HEADER_SIZE = 4
 
 const (
-	BNODE_INTERNAL BNodeType = iota
+	BNODE_PARENT BNodeType = iota
 	BNODE_LEAF
 )
 
@@ -19,7 +19,7 @@ type BNodeKeyPosition = uint16
 /*
 	Node Format
 
-	| type (Leaf of Internal) | number of stored keys | pointers to child nodes (used by Internal) | offsets of key-value pairs (used by Leaf) |                             key-value pairs                         |
+	| type (Leaf of Parent) | number of stored keys | pointers to child nodes (used by Parent) | offsets of key-value pairs (used by Leaf) |                             key-value pairs                         |
 	|          2B             |          2B           |            numberOfKeys * 8B               |          numberOfKeys * 2B                | {keyLength 2B} {valueLength 2B} {key keyLength} {value valueLength} |
 
 */
@@ -111,6 +111,22 @@ func (node *BNode) AppendKeyValue(key []byte, value []byte) error {
 	return nil
 }
 
+func (node *BNode) AppendPointer(key []byte, pointer BNodePointer) error {
+	// we find first value nil or pointer 0 that means we dont store any values for such position
+
+	position := node.getAvailableKeyPosition()
+
+	if position == node.GetStoredKeysNumber() {
+		return fmt.Errorf("couldn't append key-value because node is full")
+	}
+
+	if err := node.AppendKeyValue(key, nil); err != nil {
+		return err
+	}
+
+	return node.SetChildPointer(position, pointer)
+}
+
 func (node *BNode) GetSizeInBytes() uint16 {
 	// we store offset of the end of last key-value pair as size of node
 
@@ -144,7 +160,9 @@ func (node *BNode) Copy(source *BNode, from BNodeKeyPosition, to BNodeKeyPositio
 		node.setKeyValueOffset(targetCursor+1, (sourceOffset-sourceBeginOffset)+targetBeginOffset)
 	}
 
-	copy(node.data[node.convertKeyValueOffsetToAddress(targetBeginOffset):], source.data[source.convertKeyValueOffsetToAddress(sourceBeginOffset):source.convertKeyValueOffsetToAddress(sourceEndOffset)])
+	copy(
+		node.data[node.convertKeyValueOffsetToAddress(targetBeginOffset):],
+		source.data[source.convertKeyValueOffsetToAddress(sourceBeginOffset):source.convertKeyValueOffsetToAddress(sourceEndOffset)])
 
 	return nil
 }
