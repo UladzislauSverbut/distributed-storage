@@ -84,10 +84,10 @@ func (tree *BTree) Delete(key []byte) error {
 
 	if updatedRootNode.getType() == BNODE_PARENT && updatedRootNode.getStoredKeysNumber() == 1 {
 		firstChild, _ := updatedRootNode.getChildPointer(BNodeKeyPosition(0))
-		updatedRootNode = tree.storage.Get(firstChild)
+		tree.root = firstChild
+	} else {
+		tree.root = tree.storage.Create(updatedRootNode)
 	}
-
-	tree.root = tree.storage.Create(updatedRootNode)
 
 	return nil
 }
@@ -287,7 +287,7 @@ func (tree *BTree) mergeNodes(first *BNode, second *BNode) *BNode {
 	mergedNode.setHeader(first.getType(), first.getStoredKeysNumber()+first.getStoredKeysNumber())
 
 	mergedNode.copy(first, 0, 0, first.getStoredKeysNumber())
-	mergedNode.copy(second, first.getStoredKeysNumber(), first.getStoredKeysNumber(), second.getStoredKeysNumber())
+	mergedNode.copy(second, 0, first.getStoredKeysNumber(), second.getStoredKeysNumber())
 
 	return mergedNode
 }
