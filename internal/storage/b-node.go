@@ -100,8 +100,8 @@ func (node *BNode) appendKeyValue(key []byte, value []byte) error {
 	node.setChildPointer(position, 0)
 	keyValueAddress := node.convertKeyValueOffsetToAddress(node.getKeyValueOffset(position))
 
-	binary.BigEndian.PutUint16(node.data[keyValueAddress:], uint16(len(key)))
-	binary.BigEndian.PutUint16(node.data[keyValueAddress+2:], uint16(len(value)))
+	binary.LittleEndian.PutUint16(node.data[keyValueAddress:], uint16(len(key)))
+	binary.LittleEndian.PutUint16(node.data[keyValueAddress+2:], uint16(len(value)))
 
 	copy(node.data[keyValueAddress+4:], key)
 	copy(node.data[keyValueAddress+4+uint16(len(key)):], value)
@@ -127,7 +127,7 @@ func (node *BNode) appendPointer(key []byte, pointer BNodePointer) error {
 	return node.setChildPointer(position, pointer)
 }
 
-func (node *BNode) GetSizeInBytes() uint16 {
+func (node *BNode) getSizeInBytes() uint16 {
 	// we store offset of the end of last key-value pair as size of node
 
 	offset := node.getKeyValueOffset(node.getStoredKeysNumber())
@@ -135,7 +135,7 @@ func (node *BNode) GetSizeInBytes() uint16 {
 	return node.convertKeyValueOffsetToAddress(offset)
 }
 
-func (node *BNode) Copy(source *BNode, from BNodeKeyPosition, to BNodeKeyPosition, quantity uint16) error {
+func (node *BNode) copy(source *BNode, from BNodeKeyPosition, to BNodeKeyPosition, quantity uint16) error {
 
 	if from+quantity > source.getStoredKeysNumber() {
 		return fmt.Errorf("couldn't copy %d values from position %d because source node has only %d keys", quantity, from, source.getStoredKeysNumber())
@@ -168,7 +168,7 @@ func (node *BNode) Copy(source *BNode, from BNodeKeyPosition, to BNodeKeyPositio
 }
 
 func (node *BNode) setKeyValueOffset(position BNodeKeyPosition, keyValueOffset uint16) error {
-	if position >= node.getStoredKeysNumber() {
+	if position > node.getStoredKeysNumber() {
 		return fmt.Errorf("BNode doesn't store key-value with index %d", position)
 	}
 
@@ -201,7 +201,7 @@ func (node *BNode) getAvailableKeyPosition() BNodeKeyPosition {
 		value, _ := node.getValue(position)
 		pointer, _ := node.getChildPointer(position)
 
-		if value == nil || pointer == 0 {
+		if len(value) == 0 && pointer == 0 {
 			return position
 		}
 	}
