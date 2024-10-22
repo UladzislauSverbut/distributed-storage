@@ -1,4 +1,4 @@
-package storage
+package tree
 
 import (
 	"encoding/binary"
@@ -41,43 +41,41 @@ func (node *BNode) setHeader(nodeType BNodeType, numberOfKeys uint16) {
 	binary.LittleEndian.PutUint16(node.data[2:4], numberOfKeys)
 }
 
-func (node *BNode) getChildPointer(position BNodeKeyPosition) (BNodePointer, error) {
+func (node *BNode) getChildPointer(position BNodeKeyPosition) BNodePointer {
 	if position >= node.getStoredKeysNumber() {
-		return 0, fmt.Errorf("BNode doesn't store child pointer at position %d", position)
+		panic(fmt.Sprintf("BNode doesn't store child pointer at position %d", position))
 	}
 
 	childPointerAddress := 8*position + HEADER_SIZE
 
-	return binary.LittleEndian.Uint64(node.data[childPointerAddress:]), nil
+	return binary.LittleEndian.Uint64(node.data[childPointerAddress:])
 }
 
-func (node *BNode) setChildPointer(position BNodeKeyPosition, pointer BNodePointer) error {
+func (node *BNode) setChildPointer(position BNodeKeyPosition, pointer BNodePointer) {
 	if position >= node.getStoredKeysNumber() {
-		return fmt.Errorf("BNode doesn't store child pointer at position %d", position)
+		panic(fmt.Sprintf("BNode doesn't store child pointer at position %d", position))
 	}
 
 	childPointerAddress := 8*position + HEADER_SIZE
 
 	binary.LittleEndian.PutUint64(node.data[childPointerAddress:], pointer)
-
-	return nil
 }
 
-func (node *BNode) getKey(position BNodeKeyPosition) ([]byte, error) {
+func (node *BNode) getKey(position BNodeKeyPosition) []byte {
 	if position >= node.getStoredKeysNumber() {
-		return nil, fmt.Errorf("BNode doesn't store key at position %d", position)
+		panic(fmt.Sprintf("BNode doesn't store key at position %d", position))
 	}
 
 	offset := node.getKeyValueOffset(position)
 	address := node.convertKeyValueOffsetToAddress(offset)
 	keyLength := binary.LittleEndian.Uint16(node.data[address:])
 
-	return node.data[address+2+2:][:keyLength], nil
+	return node.data[address+2+2:][:keyLength]
 }
 
-func (node *BNode) getValue(position BNodeKeyPosition) ([]byte, error) {
+func (node *BNode) getValue(position BNodeKeyPosition) []byte {
 	if position >= node.getStoredKeysNumber() {
-		return nil, fmt.Errorf("BNode doesn't store value at position %d", position)
+		panic(fmt.Sprintf("BNode doesn't store value at position %d", position))
 	}
 
 	offset := node.getKeyValueOffset(position)
@@ -85,16 +83,16 @@ func (node *BNode) getValue(position BNodeKeyPosition) ([]byte, error) {
 	keyLength := binary.LittleEndian.Uint16(node.data[address:])
 	valueLength := binary.LittleEndian.Uint16(node.data[address+2:])
 
-	return node.data[address+2+2+keyLength:][:valueLength], nil
+	return node.data[address+2+2+keyLength:][:valueLength]
 }
 
-func (node *BNode) appendKeyValue(key []byte, value []byte) error {
+func (node *BNode) appendKeyValue(key []byte, value []byte) {
 	// we find first value nil or pointer 0 that means we dont store any values for such position
 
 	position := node.getAvailableKeyPosition()
 
 	if position == node.getStoredKeysNumber() {
-		return fmt.Errorf("couldn't append key-value because node is full")
+		panic("couldn't append key-value because node is full")
 	}
 
 	node.setChildPointer(position, 0)
@@ -107,24 +105,19 @@ func (node *BNode) appendKeyValue(key []byte, value []byte) error {
 	copy(node.data[keyValueAddress+4+uint16(len(key)):], value)
 
 	node.setKeyValueOffset(position+1, keyValueAddress+4+uint16(len(key)+len(value)))
-
-	return nil
 }
 
-func (node *BNode) appendPointer(key []byte, pointer BNodePointer) error {
+func (node *BNode) appendPointer(key []byte, pointer BNodePointer) {
 	// we find first value nil or pointer 0 that means we dont store any values for such position
 
 	position := node.getAvailableKeyPosition()
 
 	if position == node.getStoredKeysNumber() {
-		return fmt.Errorf("couldn't append key-value because node is full")
+		panic("couldn't append key-value because node is full")
 	}
 
-	if err := node.appendKeyValue(key, nil); err != nil {
-		return err
-	}
-
-	return node.setChildPointer(position, pointer)
+	node.appendKeyValue(key, nil)
+	node.setChildPointer(position, pointer)
 }
 
 func (node *BNode) getSizeInBytes() uint16 {
@@ -135,14 +128,14 @@ func (node *BNode) getSizeInBytes() uint16 {
 	return node.convertKeyValueOffsetToAddress(offset)
 }
 
-func (node *BNode) copy(source *BNode, from BNodeKeyPosition, to BNodeKeyPosition, quantity uint16) error {
+func (node *BNode) copy(source *BNode, from BNodeKeyPosition, to BNodeKeyPosition, quantity uint16) {
 
 	if from+quantity > source.getStoredKeysNumber() {
-		return fmt.Errorf("couldn't copy %d values from position %d because source node has only %d keys", quantity, from, source.getStoredKeysNumber())
+		panic(fmt.Sprintf("couldn't copy %d values from position %d because source node has only %d keys", quantity, from, source.getStoredKeysNumber()))
 	}
 
 	if to+quantity > node.getStoredKeysNumber() {
-		return fmt.Errorf("couldn't copy %d values from position %d because target node has only %d keys", quantity, from, node.getStoredKeysNumber())
+		panic(fmt.Sprintf("couldn't copy %d values from position %d because target node has only %d keys", quantity, from, node.getStoredKeysNumber()))
 	}
 
 	sourceBeginOffset := source.getKeyValueOffset(from)
@@ -153,7 +146,7 @@ func (node *BNode) copy(source *BNode, from BNodeKeyPosition, to BNodeKeyPositio
 		targetCursor := to + shift
 		sourceCursor := from + shift
 
-		copiedPointer, _ := source.getChildPointer(sourceCursor)
+		copiedPointer := source.getChildPointer(sourceCursor)
 		node.setChildPointer(targetCursor, copiedPointer)
 
 		sourceOffset := source.getKeyValueOffset(sourceCursor + 1)
@@ -164,23 +157,20 @@ func (node *BNode) copy(source *BNode, from BNodeKeyPosition, to BNodeKeyPositio
 		node.data[node.convertKeyValueOffsetToAddress(targetBeginOffset):],
 		source.data[source.convertKeyValueOffsetToAddress(sourceBeginOffset):source.convertKeyValueOffsetToAddress(sourceEndOffset)])
 
-	return nil
 }
 
-func (node *BNode) setKeyValueOffset(position BNodeKeyPosition, keyValueOffset uint16) error {
+func (node *BNode) setKeyValueOffset(position BNodeKeyPosition, keyValueOffset uint16) {
 	if position > node.getStoredKeysNumber() {
-		return fmt.Errorf("BNode doesn't store key-value with index %d", position)
+		panic(fmt.Sprintf("BNode doesn't store key-value with index %d", position))
 	}
 
 	if position == 0 {
-		return fmt.Errorf("BNode doesn't store offset for first key-value because its always 0")
+		panic("BNode doesn't store offset for first key-value because its always 0")
 	}
 
 	address := HEADER_SIZE + node.getStoredKeysNumber()*8 + (position-1)*2
 
 	binary.LittleEndian.PutUint16(node.data[address:], keyValueOffset)
-
-	return nil
 }
 
 func (node *BNode) getKeyValueOffset(position BNodeKeyPosition) uint16 {
@@ -198,8 +188,8 @@ func (node *BNode) getKeyValueOffset(position BNodeKeyPosition) uint16 {
 
 func (node *BNode) getAvailableKeyPosition() BNodeKeyPosition {
 	for position := BNodeKeyPosition(0); position < node.getStoredKeysNumber(); position++ {
-		value, _ := node.getValue(position)
-		pointer, _ := node.getChildPointer(position)
+		value := node.getValue(position)
+		pointer := node.getChildPointer(position)
 
 		if len(value) == 0 && pointer == 0 {
 			return position
