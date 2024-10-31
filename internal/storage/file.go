@@ -8,16 +8,15 @@ import (
 	"syscall"
 )
 
-type pagePointer = uint64
+type PagePointer = uint64
 
-type file struct {
+type File struct {
 	pointer *os.File
-	path    string
 	size    int
 }
 
-type fileSystemStorage struct {
-	file              file
+type FileStorage struct {
+	file              File
 	pageSize          int
 	storedPagesNumber int
 	allocatedPages    [][]byte
@@ -25,14 +24,8 @@ type fileSystemStorage struct {
 	virtualMemory     [][]byte
 }
 
-func newFileSystemStorage(filePath string, pageSize int) (*fileSystemStorage, error) {
-	pointer, err := os.Open(filePath)
-
-	if err != nil {
-		return nil, err
-	}
-
-	fileStat, err := pointer.Stat()
+func NewFileStorage(file *os.File, pageSize int) (*FileStorage, error) {
+	fileStat, err := file.Stat()
 
 	if err != nil {
 		return nil, err
@@ -44,28 +37,33 @@ func newFileSystemStorage(filePath string, pageSize int) (*fileSystemStorage, er
 		return nil, errors.New("FileSystem storage supports only files with size of multiple pages")
 	}
 
-	virtualMemory, err := syscall.Mmap(int(pointer.Fd()), 0, fileSize, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
+	virtualMemorySize := pageSize << 10
+
+	for virtualMemorySize < fileSize {
+		virtualMemorySize *= 2
+	}
+
+	virtualMemory, err := syscall.Mmap(int(file.Fd()), 0, fileSize, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 
 	if err != nil {
 		return nil, err
 	}
 
-	return &fileSystemStorage{
-		file: file{
-			pointer: pointer,
-			path:    filePath,
+	return &FileStorage{
+		file: File{
+			pointer: file,
 			size:    fileSize,
 		},
 		pageSize:          pageSize,
 		storedPagesNumber: 0,
 		allocatedPages:    [][]byte{},
 		virtualMemory:     [][]byte{virtualMemory},
-		virtualMemorySize: fileSize,
+		virtualMemorySize: virtualMemorySize,
 	}, nil
 }
 
-func (storage *fileSystemStorage) getPage(pointer pagePointer) []byte {
-	firstPagePointer := pagePointer(0)
+func (storage *FileStorage) GetPage(pointer PagePointer) []byte {
+	firstPagePointer := PagePointer(0)
 
 	for _, memorySegment := range storage.virtualMemory {
 		lastPagePointer := firstPagePointer + uint64(len(memorySegment)/storage.pageSize)
@@ -81,16 +79,70 @@ func (storage *fileSystemStorage) getPage(pointer pagePointer) []byte {
 	panic(fmt.Sprintf("Cant find unstored page %d", pointer))
 }
 
-func (storage *fileSystemStorage) createPage() pagePointer {
+func (storage *FileStorage) CreatePage() PagePointer {
 	page := make([]byte, storage.pageSize)
 	pointer := storage.storedPagesNumber + len(storage.allocatedPages)
 
 	storage.allocatedPages = append(storage.allocatedPages, page)
 
-	return pagePointer(pointer)
+	return PagePointer(pointer)
 }
 
-func (storage *fileSystemStorage) splitFile(desireNumberOfPages int) error {
+func (storage *FileStorage) SavePage(pointer PagePointer) error {
+	if _, err := storage.file.pointer.WriteAt(storage.GetPage(pointer), int64(pointer)*int64(storage.pageSize)); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (storage *FileStorage) SavePages() error {
+	if err := storage.saveAllocatedPages(); err != nil {
+		return err
+	}
+
+	return storage.syncPagesWithFile()
+}
+
+func (storage *FileStorage) GetFileSize() int {
+	return storage.file.size
+}
+
+func (storage *FileStorage) GetVirtualSize() int {
+	return storage.virtualMemorySize
+}
+
+func (storage *FileStorage) saveAllocatedPages() error {
+	totalPages := storage.storedPagesNumber + len(storage.allocatedPages)
+
+	if err := storage.extendFile(totalPages); err != nil {
+		return err
+	}
+
+	if err := storage.splitFile(totalPages); err != nil {
+		return err
+	}
+
+	for pageIndex, page := range storage.allocatedPages {
+		pointer := storage.storedPagesNumber + pageIndex
+		copy(storage.GetPage(uint64(pointer)), page)
+	}
+
+	return nil
+}
+
+func (storage *FileStorage) syncPagesWithFile() error {
+	if err := storage.file.pointer.Sync(); err != nil {
+		return err
+	}
+
+	storage.storedPagesNumber += len(storage.allocatedPages)
+	storage.allocatedPages = make([][]byte, 0)
+
+	return nil
+}
+
+func (storage *FileStorage) splitFile(desireNumberOfPages int) error {
 	if storage.virtualMemorySize >= desireNumberOfPages*storage.pageSize {
 		return nil
 	}
@@ -107,7 +159,7 @@ func (storage *fileSystemStorage) splitFile(desireNumberOfPages int) error {
 	return nil
 }
 
-func (storage *fileSystemStorage) extendFile(desireNumberOfPages int) error {
+func (storage *FileStorage) extendFile(desireNumberOfPages int) error {
 	filePages := storage.file.size / storage.pageSize
 
 	if filePages >= desireNumberOfPages {

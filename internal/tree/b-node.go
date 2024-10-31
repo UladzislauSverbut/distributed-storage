@@ -156,7 +156,6 @@ func (node *BNode) copy(source *BNode, from BNodeKeyPosition, to BNodeKeyPositio
 	copy(
 		node.data[node.convertKeyValueOffsetToAddress(targetBeginOffset):],
 		source.data[source.convertKeyValueOffsetToAddress(sourceBeginOffset):source.convertKeyValueOffsetToAddress(sourceEndOffset)])
-
 }
 
 func (node *BNode) setKeyValueOffset(position BNodeKeyPosition, keyValueOffset uint16) {
