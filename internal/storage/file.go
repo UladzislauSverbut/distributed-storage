@@ -43,7 +43,7 @@ func NewFileStorage(file *os.File, pageSize int) (*FileStorage, error) {
 		virtualMemorySize *= 2
 	}
 
-	virtualMemory, err := syscall.Mmap(int(file.Fd()), 0, fileSize, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
+	virtualMemory, err := syscall.Mmap(int(file.Fd()), 0, virtualMemorySize, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 
 	if err != nil {
 		return nil, err
@@ -88,6 +88,9 @@ func (storage *FileStorage) CreatePage() PagePointer {
 	return PagePointer(pointer)
 }
 
+func (storage *FileStorage) DeletePage(pointer PagePointer) {
+}
+
 func (storage *FileStorage) SavePage(pointer PagePointer) error {
 	if _, err := storage.file.pointer.WriteAt(storage.GetPage(pointer), int64(pointer)*int64(storage.pageSize)); err != nil {
 		return err
@@ -104,12 +107,37 @@ func (storage *FileStorage) SavePages() error {
 	return storage.syncPagesWithFile()
 }
 
+func (storage *FileStorage) SetNumberOfPages(numberOfPages int) error {
+	if numberOfPages < 1 || numberOfPages > storage.file.size/storage.pageSize {
+		return fmt.Errorf("FileSystem storage couldn`t contain %d pages", numberOfPages)
+	}
+
+	storage.storedPagesNumber = numberOfPages
+
+	return nil
+}
+
+func (storage *FileStorage) GetNumberOfPages() int {
+	return storage.storedPagesNumber + len(storage.allocatedPages)
+}
+
 func (storage *FileStorage) GetFileSize() int {
 	return storage.file.size
 }
 
-func (storage *FileStorage) GetVirtualSize() int {
+func (storage *FileStorage) GetVirtualMemorySize() int {
 	return storage.virtualMemorySize
+}
+
+func (storage *FileStorage) syncPagesWithFile() error {
+	if err := storage.file.pointer.Sync(); err != nil {
+		return err
+	}
+
+	storage.storedPagesNumber += len(storage.allocatedPages)
+	storage.allocatedPages = make([][]byte, 0)
+
+	return nil
 }
 
 func (storage *FileStorage) saveAllocatedPages() error {
@@ -127,17 +155,6 @@ func (storage *FileStorage) saveAllocatedPages() error {
 		pointer := storage.storedPagesNumber + pageIndex
 		copy(storage.GetPage(uint64(pointer)), page)
 	}
-
-	return nil
-}
-
-func (storage *FileStorage) syncPagesWithFile() error {
-	if err := storage.file.pointer.Sync(); err != nil {
-		return err
-	}
-
-	storage.storedPagesNumber += len(storage.allocatedPages)
-	storage.allocatedPages = make([][]byte, 0)
 
 	return nil
 }
@@ -167,7 +184,7 @@ func (storage *FileStorage) extendFile(desireNumberOfPages int) error {
 	}
 
 	for filePages < desireNumberOfPages {
-		incrementPages := int(math.Ceil(float64(filePages) / 8))
+		incrementPages := int(math.Ceil(float64(desireNumberOfPages) / 8))
 		filePages += incrementPages
 	}
 
