@@ -7,6 +7,7 @@ import (
 )
 
 type StorageAdapter interface {
+	Root() BNodePointer         // get root node pointer
 	Get(BNodePointer) *BNode    // dereference a pointer
 	Create(*BNode) BNodePointer // allocate a new page
 	Delete(BNodePointer)        // deallocate a page
@@ -27,7 +28,7 @@ func New(storage StorageAdapter, config BTreeConfig) *BTree {
 	return &BTree{
 		storage: storage,
 		config:  config,
-		root:    BNodePointer(0),
+		root:    storage.Root(),
 	}
 }
 func (tree *BTree) Get(key []byte) ([]byte, error) {
