@@ -18,7 +18,7 @@ type FileStorage struct {
 	file              File
 	pageSize          int
 	storedPagesNumber int
-	allocatedPages    [][]byte
+	allocatedPages    map[PagePointer][]byte
 	virtualMemorySize int
 	virtualMemory     [][]byte
 }
@@ -68,7 +68,7 @@ func NewFileStorage(file *os.File, pageSize int) (*FileStorage, error) {
 		},
 		pageSize:          pageSize,
 		storedPagesNumber: 0,
-		allocatedPages:    [][]byte{},
+		allocatedPages:    map[PagePointer][]byte{},
 		virtualMemory:     [][]byte{virtualMemory},
 		virtualMemorySize: fileSize,
 	}
@@ -137,7 +137,7 @@ func (storage *FileStorage) CreatePage() PagePointer {
 	page := make([]byte, storage.pageSize)
 	pointer := storage.storedPagesNumber + len(storage.allocatedPages)
 
-	storage.allocatedPages = append(storage.allocatedPages, page)
+	storage.allocatedPages[PagePointer(pointer)] = page
 
 	return PagePointer(pointer)
 }
@@ -181,7 +181,7 @@ func (storage *FileStorage) syncPagesWithFile() error {
 	}
 
 	storage.storedPagesNumber += len(storage.allocatedPages)
-	storage.allocatedPages = make([][]byte, 0)
+	storage.allocatedPages = map[uint64][]byte{}
 
 	return nil
 }
@@ -197,8 +197,7 @@ func (storage *FileStorage) saveAllocatedPages() error {
 		return err
 	}
 
-	for pageIndex, page := range storage.allocatedPages {
-		pointer := storage.storedPagesNumber + pageIndex
+	for pointer, page := range storage.allocatedPages {
 		copy(storage.GetPage(uint64(pointer)), page)
 	}
 
