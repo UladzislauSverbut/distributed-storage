@@ -125,9 +125,9 @@ func (tree *BTree) getKeyValue(node *BNode, key []byte) []byte {
 			storedKey := node.getKey(keyPosition)
 
 			if bytes.Equal(key, storedKey) {
-				return nil
-			} else {
 				return node.getValue(keyPosition)
+			} else {
+				return nil
 			}
 		}
 	case BNODE_PARENT:
@@ -200,9 +200,13 @@ func (tree *BTree) insertLeafKeyValue(node *BNode, position BNodeKeyPosition, ke
 	newNode := &BNode{data: make([]byte, 2*tree.config.PageSize)}
 	newNode.setHeader(BNODE_LEAF, node.getStoredKeysNumber()+1)
 
-	newNode.copy(node, 0, 0, position+1)
-	newNode.appendKeyValue(key, value)
-	newNode.copy(node, position+1, position+2, node.getStoredKeysNumber()-(position+1))
+	if node.getStoredKeysNumber() > 0 {
+		newNode.copy(node, 0, 0, position+1)
+		newNode.appendKeyValue(key, value)
+		newNode.copy(node, position+1, position+2, node.getStoredKeysNumber()-(position+1))
+	} else {
+		newNode.appendKeyValue(key, value)
+	}
 
 	return newNode
 }

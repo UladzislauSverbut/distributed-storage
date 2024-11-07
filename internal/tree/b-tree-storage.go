@@ -7,7 +7,7 @@ import (
 	"os"
 )
 
-const STORAGE_FILE_PATH = "/home/vladesco/kv/data"
+const STORAGE_FILE_PATH = "/var/lib/kv/data"
 
 type BTreeFileStorage struct {
 	fs *storage.FileStorage

@@ -19,8 +19,8 @@ type BNodeKeyPosition = uint16
 /*
 	Node Format
 
-	| type (Leaf of Parent) | number of stored keys | pointers to child nodes (used by Parent) | offsets of key-value pairs (used by Leaf) |                             key-value pairs                         |
-	|          2B             |          2B           |            numberOfKeys * 8B               |          numberOfKeys * 2B            | {keyLength 2B} {valueLength 2B} {key keyLength} {value valueLength} |
+	| type (Leaf of Parent)   | number of stored keys | pointers to child nodes (used by Parent)   | offsets of key-value pairs (used by Leaf) |                             key-value pairs                         |
+	|          2B             |          2B           |            numberOfKeys * 8B               |          numberOfKeys * 2B                | {keyLength 2B} {valueLength 2B} {key keyLength} {value valueLength} |
 
 */
 
@@ -62,6 +62,10 @@ func (node *BNode) setChildPointer(position BNodeKeyPosition, pointer BNodePoint
 }
 
 func (node *BNode) getKey(position BNodeKeyPosition) []byte {
+	if node.getStoredKeysNumber() == 0 {
+		return nil
+	}
+
 	if position >= node.getStoredKeysNumber() {
 		panic(fmt.Sprintf("BNode doesn't store key at position %d", position))
 	}
