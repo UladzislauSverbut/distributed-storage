@@ -100,7 +100,7 @@ func (storage *FileStorage) GetMetaInfo() []byte {
 }
 
 func (storage *FileStorage) SaveMetaInfo(meta []byte) error {
-	if len(meta) > storage.pageSize-32 {
+	if len(meta) > storage.pageSize-40 {
 		panic(fmt.Sprintf("FileSystem storage couldn`t store metadata with size %d", len(meta)))
 	}
 
