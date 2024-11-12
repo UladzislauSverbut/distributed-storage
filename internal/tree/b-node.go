@@ -28,7 +28,7 @@ type BNode struct {
 	data []byte
 }
 
-func (node *BNode) getType() uint16 {
+func (node *BNode) getType() BNodeType {
 	return binary.LittleEndian.Uint16(node.data[0:2])
 }
 
