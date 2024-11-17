@@ -1,12 +1,18 @@
 package db
 
-import "distributed-storage/internal/kv"
+import (
+	"distributed-storage/internal/kv"
+	"encoding/json"
+	"fmt"
+)
 
-const DEFAULT_DIRECTORY string = "/var/lib/kv/data"
+const DEFAULT_DIRECTORY = "/var/lib/kv/data"
+const META_TABLE_ID = "meta"
+const SCHEMA_TABLE_ID = "schemas"
 
 type Database struct {
-	keyValue *kv.KeyValue
-	tables   map[string]*Table
+	kv     *kv.KeyValue
+	tables map[string]*Table
 }
 
 type DatabaseConfig struct {
@@ -28,36 +34,71 @@ func New(config *DatabaseConfig) (*Database, error) {
 		return nil, err
 	}
 
-	return &Database{
-		keyValue: keyValue,
-		tables:   make(map[string]*Table),
-	}, nil
+	database := &Database{
+		kv:     keyValue,
+		tables: make(map[string]*Table),
+	}
 
+	database.initSystemTables()
+
+	return database, nil
 }
 
-// func (database *Database) Get(tableName string) *Table {
-// 	table, exist := db.tables[tableName]
+func (database *Database) Get(tableName string) *Table {
+	table, exist := database.tables[tableName]
 
-// 	if !exist {
-// 		query := new(Object)
-// 		query.addString("name", []byte(tableName))
+	if !exist {
+		query := new(Record)
 
-// 		kek, err := SCHEMAS_TABLE.Get(query)
-// 	}
-// }
+		query.addString("name", []byte(tableName))
 
-// var META_TABLE = &Table{
-// 	Prefix:       1,
-// 	Name:         "@meta",
-// 	ColumnTypes:  []ValueType{VALUE_TYPE_BYTES, VALUE_TYPE_INT64},
-// 	ColumnNames:  []string{"key", "value"},
-// 	IndexColumns: []string{"key"},
-// }
+		schema, err := database.tables[SCHEMA_TABLE_ID].Get(query)
 
-// var SCHEMAS_TABLE = &Table{
-// 	Prefix:       1,
-// 	Name:         "@schema",
-// 	ColumnTypes:  []ValueType{VALUE_TYPE_BYTES, VALUE_TYPE_BYTES},
-// 	ColumnNames:  []string{"name", "definition"},
-// 	IndexColumns: []string{"name"},
-// }
+		if err != nil {
+			panic(fmt.Sprintf("Database can`t read schema table %v", table))
+		}
+
+		if schema == nil {
+			return nil
+		}
+
+		table = database.parseTableSchema(schema)
+		database.tables[tableName] = table
+	}
+
+	return table
+}
+
+func (database *Database) initSystemTables() {
+	database.tables[SCHEMA_TABLE_ID] = &Table{
+		name:         "@meta",
+		columnTypes:  []ValueType{VALUE_TYPE_BYTES, VALUE_TYPE_INT64},
+		columnNames:  []string{"key", "value"},
+		indexColumns: []string{"key"},
+		prefix:       1,
+		kv:           database.kv,
+	}
+
+	database.tables[META_TABLE_ID] = &Table{
+		name:         "@schema",
+		columnTypes:  []ValueType{VALUE_TYPE_BYTES, VALUE_TYPE_BYTES},
+		columnNames:  []string{"name", "definition"},
+		indexColumns: []string{"name"},
+		prefix:       1,
+		kv:           database.kv,
+	}
+}
+
+func (database *Database) parseTableSchema(record *Record) *Table {
+	tableSchema := record.get("definition").Str
+
+	table := &Table{
+		kv: database.kv,
+	}
+
+	if err := json.Unmarshal(tableSchema, table); err != nil {
+		panic(fmt.Sprintf("Database can`t parse scheme %v", err))
+	}
+
+	return table
+}
