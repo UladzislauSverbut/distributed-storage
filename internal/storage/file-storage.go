@@ -293,7 +293,7 @@ func (storage *FileStorage) splitFile(desireNumberOfPages int) error {
 	chunk, err := mapFileToMemory(storage.file.pointer, int64(storage.fileMemorySize), storage.fileMemorySize)
 
 	if err != nil {
-		return fmt.Errorf("Cant add chunks to file systems storage: %w", err)
+		return fmt.Errorf("FileSystem storage can`t add chunks: %w", err)
 	}
 
 	storage.fileMemorySize = len(chunk)

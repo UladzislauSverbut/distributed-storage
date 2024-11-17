@@ -1,36 +1,38 @@
 package kv
 
-import "distributed-storage/internal/tree"
+import (
+	"distributed-storage/internal/tree"
+)
 
-type DistributedKV struct {
+type KeyValue struct {
 	tree    *tree.BTree
 	storage *tree.BTreeFileStorage
 }
 
-func New() (*DistributedKV, error) {
+func New(filePath string) (*KeyValue, error) {
 	config := tree.BTreeConfig{
 		PageSize:     4096,
 		MaxValueSize: 3000,
 		MaxKeySize:   1000,
 	}
 
-	storage, err := tree.NewBTreeFileStorage(config.PageSize)
+	storage, err := tree.NewBTreeFileStorage(filePath, config.PageSize)
 
 	if err != nil {
 		return nil, err
 	}
 
-	return &DistributedKV{
+	return &KeyValue{
 		tree:    tree.New(storage, config),
 		storage: storage,
 	}, nil
 }
 
-func (kv *DistributedKV) Get(key []byte) ([]byte, error) {
+func (kv *KeyValue) Get(key []byte) ([]byte, error) {
 	return kv.tree.Get(key)
 }
 
-func (kv *DistributedKV) Set(key []byte, value []byte) error {
+func (kv *KeyValue) Set(key []byte, value []byte) error {
 	if err := kv.tree.Set(key, value); err != nil {
 		return err
 	}
@@ -38,7 +40,7 @@ func (kv *DistributedKV) Set(key []byte, value []byte) error {
 	return kv.storage.Save(kv.tree)
 }
 
-func (kv *DistributedKV) Delete(key []byte) error {
+func (kv *KeyValue) Delete(key []byte) error {
 	if err := kv.tree.Delete(key); err != nil {
 		return err
 	}

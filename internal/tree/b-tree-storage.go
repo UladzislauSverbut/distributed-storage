@@ -7,13 +7,11 @@ import (
 	"os"
 )
 
-const STORAGE_FILE_PATH = "/var/lib/kv/data"
-
 type BTreeFileStorage struct {
 	fs *storage.FileStorage
 }
 
-func NewBTreeFileStorage(pageSize int) (*BTreeFileStorage, error) {
+func NewBTreeFileStorage(filePath string, pageSize int) (*BTreeFileStorage, error) {
 	var file *os.File
 	var fs *storage.FileStorage
 	var err error
@@ -24,7 +22,7 @@ func NewBTreeFileStorage(pageSize int) (*BTreeFileStorage, error) {
 		}
 	}()
 
-	if file, err = os.OpenFile(STORAGE_FILE_PATH, os.O_RDWR|os.O_CREATE, 0644); err != nil {
+	if file, err = os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0644); err != nil {
 		return nil, err
 	}
 
