@@ -1,32 +1,20 @@
 package db
 
-const (
-	VALUE_EMPTY ValueType = iota
-	VALUE_TYPE_BYTES
-	VALUE_TYPE_INT64
-)
-
-type ValueType = uint32
-
-type Value struct {
-	Type  ValueType
-	Int64 int64
-	Str   []byte
-}
+import "distributed-storage/internal/db/value"
 
 type Record struct {
 	Fields []string
-	Values []Value
+	Values []value.Value
 }
 
-func (record *Record) addString(key string, value []byte) {
+func (record *Record) addString(key string, val []byte) {
 	record.Fields = append(record.Fields, key)
-	record.Values = append(record.Values, Value{Type: VALUE_TYPE_BYTES, Str: value})
+	record.Values = append(record.Values, value.NewStringValue(val))
 }
 
-func (record *Record) addInt64(key string, value int64) {
+func (record *Record) addInt(key string, val int64) {
 	record.Fields = append(record.Fields, key)
-	record.Values = append(record.Values, Value{Type: VALUE_TYPE_BYTES, Int64: value})
+	record.Values = append(record.Values, value.NewIntValue(val))
 }
 
 func (record *Record) get(key string) Value {

@@ -72,7 +72,7 @@ func (tree *BTree) Set(key []byte, value []byte) error {
 
 	rootNode = tree.setKeyValue(rootNode, key, value)
 
-	if int(rootNode.getSizeInBytes()) > tree.config.PageSize {
+	if int(rootNode.size()) > tree.config.PageSize {
 		splittedNodes := tree.splitNode(rootNode)
 
 		rootNode = &BNode{data: make([]byte, tree.config.PageSize)}
@@ -236,7 +236,7 @@ func (tree *BTree) setParentKeyValue(parent *BNode, position BNodeKeyPosition, k
 
 	var newParentChildren []*BNode
 
-	if int(updatedChild.getSizeInBytes()) > tree.config.PageSize {
+	if int(updatedChild.size()) > tree.config.PageSize {
 		newParentChildren = tree.splitNode(updatedChild)
 	} else {
 		newParentChildren = []*BNode{updatedChild}
@@ -277,12 +277,12 @@ func (tree *BTree) replaceParentChildren(parent *BNode, children []*BNode, posit
 }
 
 func (tree *BTree) mergeParentChildren(node *BNode, newChild *BNode, position BNodeKeyPosition) *BNode {
-	if int(newChild.getSizeInBytes()) < tree.config.PageSize/4 {
+	if int(newChild.size()) < tree.config.PageSize/4 {
 		if position > 0 {
 			leftChildPointer := node.getChildPointer(position - 1)
 			leftChild := tree.storage.Get(leftChildPointer)
 
-			if int(leftChild.getSizeInBytes()+newChild.getSizeInBytes()) < tree.config.PageSize-HEADER_SIZE {
+			if int(leftChild.size()+newChild.size()) < tree.config.PageSize-HEADER_SIZE {
 				tree.storage.Delete(leftChildPointer)
 
 				return tree.replaceParentChildren(node, []*BNode{tree.mergeNodes(leftChild, newChild)}, position-1, 2)
@@ -293,7 +293,7 @@ func (tree *BTree) mergeParentChildren(node *BNode, newChild *BNode, position BN
 			rightChildPointer := node.getChildPointer(position + 1)
 			rightChild := tree.storage.Get(rightChildPointer)
 
-			if int(rightChild.getSizeInBytes()+newChild.getSizeInBytes()) < tree.config.PageSize-HEADER_SIZE {
+			if int(rightChild.size()+newChild.size()) < tree.config.PageSize-HEADER_SIZE {
 				tree.storage.Delete(rightChildPointer)
 
 				return tree.replaceParentChildren(node, []*BNode{tree.mergeNodes(newChild, rightChild)}, position, 2)
@@ -318,7 +318,7 @@ func (tree *BTree) splitNode(node *BNode) []*BNode {
 	firstNode.copy(node, 0, 0, storedKeysForFirstNode)
 	secondNode.copy(node, storedKeysForFirstNode, 0, storedKeysForSecondNode)
 
-	if int(firstNode.getSizeInBytes()) > tree.config.PageSize {
+	if int(firstNode.size()) > tree.config.PageSize {
 		splittedNodes := tree.splitNode(firstNode)
 
 		thirdNode := secondNode

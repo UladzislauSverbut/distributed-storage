@@ -124,7 +124,7 @@ func (node *BNode) appendPointer(key []byte, pointer BNodePointer) {
 	node.setChildPointer(position, pointer)
 }
 
-func (node *BNode) getSizeInBytes() uint16 {
+func (node *BNode) size() uint16 {
 	// we store offset of the end of last key-value pair as size of node
 
 	offset := node.getKeyValueOffset(node.getStoredKeysNumber())
