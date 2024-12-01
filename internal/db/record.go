@@ -1,20 +1,13 @@
 package db
 
-import "distributed-storage/internal/db/value"
-
 type Record struct {
 	Fields []string
-	Values []value.Value
+	Values []Value
 }
 
-func (record *Record) addString(key string, val []byte) {
+func (record *Record) addValue(key string, value Value) {
 	record.Fields = append(record.Fields, key)
-	record.Values = append(record.Values, value.NewStringValue(val))
-}
-
-func (record *Record) addInt(key string, val int64) {
-	record.Fields = append(record.Fields, key)
-	record.Values = append(record.Values, value.NewIntValue(val))
+	record.Values = append(record.Values, value)
 }
 
 func (record *Record) get(key string) Value {
@@ -24,5 +17,5 @@ func (record *Record) get(key string) Value {
 		}
 	}
 
-	return Value{Type: VALUE_EMPTY}
+	return nil
 }

@@ -8,37 +8,58 @@ import (
 )
 
 type Table struct {
-	name         string
-	columnTypes  []ValueType
-	columnNames  []string
-	indexColumns []string
-	prefix       uint32
+	Name         string
+	ColumnTypes  []ValueType
+	ColumnNames  []string
+	IndexColumns []string
+	Prefix       uint32
 	kv           *kv.KeyValue
 }
 
-func (table *Table) Get(query *Record) (*Record, error) {
-	keyColumnValues, err := table.extractKeyColumnValues(query)
+func (table *Table) Get(record *Record) (bool, error) {
+	indexedColumnValues, err := table.extractIndexedColumnValues(record)
 
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 
-	value, err := table.kv.Get(table.createKey(keyColumnValues))
+	value, err := table.kv.Get(table.createKey(indexedColumnValues))
 
-	if err != nil {
-		return nil, err
+	if value == nil {
+		return false, err
 	}
 
+	for columnIndex, columnName := range table.ColumnNames {
+		var columnValue Value
+
+		if record.get(columnName) == nil {
+			switch table.ColumnTypes[columnIndex] {
+			case VALUE_TYPE_INT64:
+				columnValue = &IntValue{}
+			case VALUE_TYPE_STRING:
+				columnValue = &StringValue{}
+			default:
+				panic(fmt.Sprintf("Table doesn`t support column with type %d:", table.ColumnTypes[columnIndex]))
+			}
+
+			columnValue.parse(value)
+			value = value[columnValue.size():]
+
+			record.addValue(columnName, columnValue)
+		}
+	}
+
+	return true, nil
 }
 
-func (table *Table) extractKeyColumnValues(query *Record) ([]Value, error) {
-	columnValues := make([]Value, len(table.indexColumns))
+func (table *Table) extractIndexedColumnValues(query *Record) ([]Value, error) {
+	columnValues := make([]Value, len(table.IndexColumns))
 
-	if len(table.indexColumns) != len(query.Fields) {
+	if len(table.IndexColumns) != len(query.Fields) {
 		return nil, fmt.Errorf("Table can`t get record because one of columns are not indexed: %v", query.Fields)
 	}
 
-	for indexColumPos, indexColumn := range table.indexColumns {
+	for indexColumPos, indexColumn := range table.IndexColumns {
 		columnPos, success := slices.BinarySearch(query.Fields, indexColumn)
 
 		if !success || len(query.Values) < columnPos {
@@ -54,38 +75,11 @@ func (table *Table) extractKeyColumnValues(query *Record) ([]Value, error) {
 func (table *Table) createKey(values []Value) []byte {
 	key := make([]byte, 4)
 
-	binary.LittleEndian.PutUint32(key, table.prefix)
-
-	key = append(key, table.encodeValues(values)...)
-
-	return key
-}
-
-func (table *Table) encodeValues(values []Value) []byte {
-	encodedValues := make([]byte, 0)
+	binary.LittleEndian.PutUint32(key, table.Prefix)
 
 	for _, value := range values {
-		switch value.Type {
-		case VALUE_TYPE_INT64:
-			unsignedValue := uint64(value.Int64) + (1 << 63)
-			encodedValue := make([]byte, 8)
-
-			binary.LittleEndian.PutUint64(encodedValue, unsignedValue)
-			encodedValues = append(encodedValues, encodedValue...)
-
-		case VALUE_TYPE_BYTES:
-			encodedValues = append(encodedValues, value.Str...)
-			encodedValues = append(encodedValues, 0) // null-terminated string
-
-		default:
-			panic(fmt.Sprint("unsupported column value type %d", value.Type))
-		}
-
+		key = append(key, value.serialize()...)
 	}
 
-	return encodedValues
-}
-
-func (table *Table) decodeValues(value []byte) ([]Value, error) {
-
+	return key
 }
