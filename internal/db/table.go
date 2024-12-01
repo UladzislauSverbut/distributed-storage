@@ -32,7 +32,7 @@ func (table *Table) Get(record *Record) (bool, error) {
 	for columnIndex, columnName := range table.ColumnNames {
 		var columnValue Value
 
-		if record.get(columnName) == nil {
+		if record.GetValue(columnName) == nil {
 			switch table.ColumnTypes[columnIndex] {
 			case VALUE_TYPE_INT64:
 				columnValue = &IntValue{}
@@ -43,9 +43,9 @@ func (table *Table) Get(record *Record) (bool, error) {
 			}
 
 			columnValue.parse(value)
-			value = value[columnValue.size():]
+			value = value[columnValue.Size():]
 
-			record.addValue(columnName, columnValue)
+			record.AddValue(columnName, columnValue)
 		}
 	}
 

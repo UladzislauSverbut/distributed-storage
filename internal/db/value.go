@@ -3,10 +3,10 @@ package db
 type ValueType = uint32
 
 type Value interface {
-	getType() ValueType
+	GetType() ValueType
+	Size() int
 	serialize() []byte
 	parse([]byte)
-	size() int
 }
 
 const (
