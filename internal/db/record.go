@@ -1,21 +1,35 @@
 package db
 
+import "slices"
+
 type Record struct {
 	Fields []string
 	Values []Value
 }
 
-func (record *Record) AddValue(key string, value Value) {
-	record.Fields = append(record.Fields, key)
-	record.Values = append(record.Values, value)
-}
+func (record *Record) Set(field string, value Value) *Record {
+	fieldPosition := slices.Index(record.Fields, field)
 
-func (record *Record) GetValue(key string) Value {
-	for index, field := range record.Fields {
-		if field == key {
-			return record.Values[index]
-		}
+	if fieldPosition >= 0 {
+		record.Values[fieldPosition] = value
+	} else {
+		record.Fields = append(record.Fields, field)
+		record.Values = append(record.Values, value)
 	}
 
-	return nil
+	return record
+}
+
+func (record *Record) Get(field string) Value {
+	fieldPosition := slices.Index(record.Fields, field)
+
+	if fieldPosition >= 0 {
+		return record.Values[fieldPosition]
+	} else {
+		return nil
+	}
+}
+
+func (record *Record) Has(field string) bool {
+	return slices.Index(record.Fields, field) >= 0
 }

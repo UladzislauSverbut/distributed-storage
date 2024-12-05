@@ -48,9 +48,7 @@ func (database *Database) Get(tableName string) *Table {
 	table, exist := database.tables[tableName]
 
 	if !exist {
-		schema := &Record{}
-
-		schema.AddValue("name", &StringValue{[]byte(tableName)})
+		schema := (&Record{}).Set("name", &StringValue{[]byte(tableName)})
 
 		exist, err := database.tables[SCHEMA_TABLE_ID].Get(schema)
 
@@ -90,7 +88,7 @@ func (database *Database) initSystemTables() {
 }
 
 func (database *Database) parseTableSchema(record *Record) *Table {
-	tableSchema := record.GetValue("definition").(*StringValue).Val
+	tableSchema := record.Get("definition").(*StringValue).Val
 
 	table := &Table{
 		kv: database.kv,
