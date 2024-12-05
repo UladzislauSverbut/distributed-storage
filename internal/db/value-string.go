@@ -52,3 +52,7 @@ func (value *StringValue) parse(serializedString []byte) {
 		}
 	}
 }
+
+func NewStringValue(value string) *StringValue {
+	return &StringValue{[]byte(value)}
+}

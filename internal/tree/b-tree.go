@@ -24,7 +24,7 @@ type BTree struct {
 	config  BTreeConfig
 }
 
-func New(storage StorageAdapter, config BTreeConfig) *BTree {
+func NewBTree(storage StorageAdapter, config BTreeConfig) *BTree {
 	return &BTree{
 		storage: storage,
 		config:  config,

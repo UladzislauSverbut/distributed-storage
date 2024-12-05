@@ -13,11 +13,11 @@ const (
 )
 
 type Table struct {
-	Name         string
-	ColumnTypes  []ValueType
-	ColumnNames  []string
-	IndexColumns []string
-	Prefix       uint32
+	name         string
+	columnTypes  []ValueType
+	columnNames  []string
+	indexColumns []string
+	prefix       uint32
 	kv           *kv.KeyValue
 }
 
@@ -85,9 +85,9 @@ func (table *Table) update(record *Record, mode int8) (bool, error) {
 }
 
 func (table *Table) getKey(query *Record) ([]Value, error) {
-	values := make([]Value, len(table.IndexColumns))
+	values := make([]Value, len(table.indexColumns))
 
-	for _, columnName := range table.IndexColumns {
+	for _, columnName := range table.indexColumns {
 		columnValue := query.Get(columnName)
 
 		if columnValue == nil {
@@ -103,7 +103,7 @@ func (table *Table) getKey(query *Record) ([]Value, error) {
 func (table *Table) encodeKey(values []Value) []byte {
 	encodedKey := make([]byte, 4)
 
-	binary.LittleEndian.PutUint32(encodedKey, table.Prefix)
+	binary.LittleEndian.PutUint32(encodedKey, table.prefix)
 
 	for _, value := range values {
 		encodedKey = append(encodedKey, value.serialize()...)
@@ -113,13 +113,13 @@ func (table *Table) encodeKey(values []Value) []byte {
 }
 
 func (table *Table) getPayload(query *Record) ([]Value, error) {
-	values := make([]Value, len(table.ColumnNames))
+	values := make([]Value, len(table.columnNames))
 
-	for columnPos, columnName := range table.ColumnNames {
+	for columnPos, columnName := range table.columnNames {
 		columnValue := query.Get(columnName)
 
 		if columnValue == nil {
-			columnValue = createValue(table.ColumnTypes[columnPos])
+			columnValue = createValue(table.columnTypes[columnPos])
 		}
 
 		values = append(values, columnValue)
@@ -139,8 +139,8 @@ func (table *Table) encodePayload(values []Value) []byte {
 }
 
 func (table *Table) decodePayload(record *Record, encodedPayload []byte) {
-	for columnPos, columnName := range table.ColumnNames {
-		columnValue := createValue(table.ColumnTypes[columnPos])
+	for columnPos, columnName := range table.columnNames {
+		columnValue := createValue(table.columnTypes[columnPos])
 
 		columnValue.parse(encodedPayload)
 		encodedPayload = encodedPayload[columnValue.Size():]

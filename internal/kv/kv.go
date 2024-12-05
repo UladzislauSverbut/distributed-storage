@@ -9,7 +9,7 @@ type KeyValue struct {
 	storage *tree.BTreeFileStorage
 }
 
-func New(filePath string) (*KeyValue, error) {
+func NewKeyValue(filePath string) (*KeyValue, error) {
 	config := tree.BTreeConfig{
 		PageSize:     4096,
 		MaxValueSize: 3000,
@@ -23,7 +23,7 @@ func New(filePath string) (*KeyValue, error) {
 	}
 
 	return &KeyValue{
-		tree:    tree.New(storage, config),
+		tree:    tree.NewBTree(storage, config),
 		storage: storage,
 	}, nil
 }

@@ -19,7 +19,14 @@ type DatabaseConfig struct {
 	Directory string
 }
 
-func New(config *DatabaseConfig) (*Database, error) {
+type TableSchema struct {
+	Name         string
+	ColumnTypes  []ValueType
+	ColumnNames  []string
+	IndexColumns []string
+}
+
+func NewDatabase(config *DatabaseConfig) (*Database, error) {
 	storageDirectory := config.Directory
 
 	if storageDirectory == "" {
@@ -28,7 +35,7 @@ func New(config *DatabaseConfig) (*Database, error) {
 
 	storageDirectory += "/data"
 
-	keyValue, err := kv.New(storageDirectory)
+	keyValue, err := kv.NewKeyValue(storageDirectory)
 
 	if err != nil {
 		return nil, err
@@ -67,22 +74,40 @@ func (database *Database) Get(tableName string) *Table {
 	return table
 }
 
+func (database *Database) Create(schema *TableSchema) (*Table, error) {
+	database.validateTableSchema(schema)
+	table := database.Get(schema.Name)
+
+	if table != nil {
+		return nil, fmt.Errorf("Database can`t create table %s because it`s already exist", schema.Name)
+	}
+
+	return &Table{
+		name:         schema.Name,
+		columnTypes:  schema.ColumnTypes,
+		columnNames:  schema.ColumnNames,
+		indexColumns: schema.IndexColumns,
+		prefix:       1,
+		kv:           database.kv,
+	}, nil
+}
+
 func (database *Database) initSystemTables() {
 	database.tables[META_TABLE_ID] = &Table{
-		Name:         "@meta",
-		ColumnTypes:  []ValueType{VALUE_TYPE_STRING, VALUE_TYPE_INT64},
-		ColumnNames:  []string{"key", "value"},
-		IndexColumns: []string{"key"},
-		Prefix:       1,
+		name:         "@meta",
+		columnTypes:  []ValueType{VALUE_TYPE_STRING, VALUE_TYPE_INT64},
+		columnNames:  []string{"key", "value"},
+		indexColumns: []string{"key"},
+		prefix:       1,
 		kv:           database.kv,
 	}
 
 	database.tables[SCHEMA_TABLE_ID] = &Table{
-		Name:         "@schema",
-		ColumnTypes:  []ValueType{VALUE_TYPE_STRING, VALUE_TYPE_STRING},
-		ColumnNames:  []string{"name", "definition"},
-		IndexColumns: []string{"name"},
-		Prefix:       1,
+		name:         "@schema",
+		columnTypes:  []ValueType{VALUE_TYPE_STRING, VALUE_TYPE_STRING},
+		columnNames:  []string{"name", "definition"},
+		indexColumns: []string{"name"},
+		prefix:       1,
 		kv:           database.kv,
 	}
 }
@@ -99,4 +124,8 @@ func (database *Database) parseTableSchema(record *Record) *Table {
 	}
 
 	return table
+}
+
+func (database *Database) validateTableSchema(schema *TableSchema) error {
+	return nil
 }
