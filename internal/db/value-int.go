@@ -5,7 +5,11 @@ import (
 )
 
 type IntValue struct {
-	Val int64
+	num int64
+}
+
+func (value *IntValue) Get() int64 {
+	return value.num
 }
 
 func (value *IntValue) GetType() ValueType {
@@ -17,7 +21,7 @@ func (value *IntValue) Size() int {
 }
 
 func (value *IntValue) serialize() []byte {
-	unsignedInt := uint64(value.Val) + (1 << 63)
+	unsignedInt := uint64(value.num) + (1 << 63)
 	serializedInt := make([]byte, 8)
 
 	binary.LittleEndian.PutUint64(serializedInt, unsignedInt)
@@ -28,7 +32,7 @@ func (value *IntValue) serialize() []byte {
 func (value *IntValue) parse(serializedInt []byte) {
 	signedInt := uint64(binary.LittleEndian.Uint64(serializedInt)) + (1 << 63)
 
-	value.Val = int64(signedInt)
+	value.num = int64(signedInt)
 }
 
 func NewIntValue(value int64) *IntValue {

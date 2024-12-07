@@ -12,17 +12,21 @@ const (
 	MODE_INSERT             // insert record
 )
 
-type Table struct {
-	name         string
-	columnTypes  []ValueType
-	columnNames  []string
-	indexColumns []string
-	prefix       uint32
-	kv           *kv.KeyValue
+type TableSchema struct {
+	Name         string
+	ColumnTypes  []ValueType
+	ColumnNames  []string
+	IndexColumns []string
+	Prefix       uint32
 }
 
-func (table *Table) Get(record *Record) (bool, error) {
-	key, err := table.getKey(record)
+type Table struct {
+	schema *TableSchema
+	kv     *kv.KeyValue
+}
+
+func (table *Table) Get(query *Record) (bool, error) {
+	key, err := table.getKey(query)
 
 	if err != nil {
 		return false, err
@@ -34,60 +38,60 @@ func (table *Table) Get(record *Record) (bool, error) {
 		return false, err
 	}
 
-	table.decodePayload(record, encodedPayload)
+	table.decodePayload(query, encodedPayload)
 
 	return true, nil
 }
 
-func (table *Table) Insert(record *Record) (bool, error) {
-	return table.update(record, MODE_INSERT)
+func (table *Table) Insert(query *Record) error {
+	return table.update(query, MODE_INSERT)
 }
 
-func (table *Table) Update(record *Record) (bool, error) {
-	return table.update(record, MODE_UPDATE)
+func (table *Table) Update(query *Record) error {
+	return table.update(query, MODE_UPDATE)
 }
 
-func (table *Table) Upsert(record *Record) (bool, error) {
-	return table.update(record, MODE_UPSERT)
+func (table *Table) Upsert(query *Record) error {
+	return table.update(query, MODE_UPSERT)
 }
 
-func (table *Table) update(record *Record, mode int8) (bool, error) {
-	key, err := table.getKey(record)
+func (table *Table) update(query *Record, mode int8) error {
+	key, err := table.getKey(query)
 
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	encodedKey := table.encodeKey(key)
 	encodedPayload, err := table.kv.Get(encodedKey)
 
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	if mode == MODE_UPDATE && encodedPayload == nil {
-		return false, fmt.Errorf("Table can`t update record because it`s not exist: %v", record)
+		return fmt.Errorf("Table can`t update record because it`s not exist: %v", query)
 	}
 
 	if mode == MODE_INSERT && encodedPayload != nil {
-		return false, fmt.Errorf("Table can`t insert record because it`s exist: %v", record)
+		return fmt.Errorf("Table can`t insert record because it`s exist: %v", query)
 	}
 
-	payload, err := table.getPayload(record)
+	payload, err := table.getPayload(query)
 
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	table.kv.Set(encodedKey, table.encodePayload(payload))
 
-	return true, nil
+	return nil
 }
 
 func (table *Table) getKey(query *Record) ([]Value, error) {
-	values := make([]Value, len(table.indexColumns))
+	values := make([]Value, len(table.schema.IndexColumns))
 
-	for _, columnName := range table.indexColumns {
+	for _, columnName := range table.schema.IndexColumns {
 		columnValue := query.Get(columnName)
 
 		if columnValue == nil {
@@ -103,7 +107,7 @@ func (table *Table) getKey(query *Record) ([]Value, error) {
 func (table *Table) encodeKey(values []Value) []byte {
 	encodedKey := make([]byte, 4)
 
-	binary.LittleEndian.PutUint32(encodedKey, table.prefix)
+	binary.LittleEndian.PutUint32(encodedKey, table.schema.Prefix)
 
 	for _, value := range values {
 		encodedKey = append(encodedKey, value.serialize()...)
@@ -113,13 +117,13 @@ func (table *Table) encodeKey(values []Value) []byte {
 }
 
 func (table *Table) getPayload(query *Record) ([]Value, error) {
-	values := make([]Value, len(table.columnNames))
+	values := make([]Value, len(table.schema.ColumnNames))
 
-	for columnPos, columnName := range table.columnNames {
+	for columnPos, columnName := range table.schema.ColumnNames {
 		columnValue := query.Get(columnName)
 
 		if columnValue == nil {
-			columnValue = createValue(table.columnTypes[columnPos])
+			columnValue = createValue(table.schema.ColumnTypes[columnPos])
 		}
 
 		values = append(values, columnValue)
@@ -139,8 +143,8 @@ func (table *Table) encodePayload(values []Value) []byte {
 }
 
 func (table *Table) decodePayload(record *Record, encodedPayload []byte) {
-	for columnPos, columnName := range table.columnNames {
-		columnValue := createValue(table.columnTypes[columnPos])
+	for columnPos, columnName := range table.schema.ColumnNames {
+		columnValue := createValue(table.schema.ColumnTypes[columnPos])
 
 		columnValue.parse(encodedPayload)
 		encodedPayload = encodedPayload[columnValue.Size():]

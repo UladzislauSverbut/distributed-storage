@@ -4,11 +4,14 @@ import (
 	"distributed-storage/internal/kv"
 	"encoding/json"
 	"fmt"
+	"strconv"
 )
 
 const DEFAULT_DIRECTORY = "/var/lib/kv/data"
-const META_TABLE_ID = "meta"
-const SCHEMA_TABLE_ID = "schemas"
+const META_TABLE_NAME = "@meta"
+const SCHEMA_TABLE_NAME = "@schemas"
+
+const MIN_UNRESERVED_TABLE_ID = 3
 
 type Database struct {
 	kv     *kv.KeyValue
@@ -17,13 +20,6 @@ type Database struct {
 
 type DatabaseConfig struct {
 	Directory string
-}
-
-type TableSchema struct {
-	Name         string
-	ColumnTypes  []ValueType
-	ColumnNames  []string
-	IndexColumns []string
 }
 
 func NewDatabase(config *DatabaseConfig) (*Database, error) {
@@ -55,77 +51,136 @@ func (database *Database) Get(tableName string) *Table {
 	table, exist := database.tables[tableName]
 
 	if !exist {
-		schema := (&Record{}).Set("name", &StringValue{[]byte(tableName)})
+		schema := database.getTableSchema(tableName)
 
-		exist, err := database.tables[SCHEMA_TABLE_ID].Get(schema)
-
-		if err != nil {
-			panic(fmt.Sprintf("Database can`t read schema table %v", table))
-		}
-
-		if !exist {
+		if schema == nil {
 			return nil
 		}
 
-		table = database.parseTableSchema(schema)
+		table = &Table{schema: schema, kv: database.kv}
 		database.tables[tableName] = table
 	}
 
 	return table
 }
 
-func (database *Database) Create(schema *TableSchema) (*Table, error) {
-	database.validateTableSchema(schema)
+func (database *Database) Create(schema TableSchema) (*Table, error) {
+	if err := database.validateTableSchema(&schema); err != nil {
+		return nil, err
+	}
+
 	table := database.Get(schema.Name)
 
 	if table != nil {
 		return nil, fmt.Errorf("Database can`t create table %s because it`s already exist", schema.Name)
 	}
 
-	return &Table{
-		name:         schema.Name,
-		columnTypes:  schema.ColumnTypes,
-		columnNames:  schema.ColumnNames,
-		indexColumns: schema.IndexColumns,
-		prefix:       1,
-		kv:           database.kv,
-	}, nil
+	tableId, err := database.getNextTableId()
+
+	if err != nil {
+		return nil, err
+	}
+
+	schema.Prefix = tableId
+
+	database.saveTableSchema(&schema)
+
+	table = &Table{
+		schema: &schema,
+		kv:     database.kv,
+	}
+
+	return table, nil
 }
 
-func (database *Database) initSystemTables() {
-	database.tables[META_TABLE_ID] = &Table{
-		name:         "@meta",
-		columnTypes:  []ValueType{VALUE_TYPE_STRING, VALUE_TYPE_INT64},
-		columnNames:  []string{"key", "value"},
-		indexColumns: []string{"key"},
-		prefix:       1,
-		kv:           database.kv,
+func (database *Database) getTableSchema(tableName string) *TableSchema {
+	schemaTable := database.Get(SCHEMA_TABLE_NAME)
+
+	query := (&Record{}).Set("name", &StringValue{[]byte(tableName)})
+
+	exist, err := schemaTable.Get(query)
+
+	if err != nil {
+		panic(fmt.Sprintf("Database can`t read schema table %v", schemaTable))
 	}
 
-	database.tables[SCHEMA_TABLE_ID] = &Table{
-		name:         "@schema",
-		columnTypes:  []ValueType{VALUE_TYPE_STRING, VALUE_TYPE_STRING},
-		columnNames:  []string{"name", "definition"},
-		indexColumns: []string{"name"},
-		prefix:       1,
-		kv:           database.kv,
-	}
-}
-
-func (database *Database) parseTableSchema(record *Record) *Table {
-	tableSchema := record.Get("definition").(*StringValue).Val
-
-	table := &Table{
-		kv: database.kv,
+	if !exist {
+		return nil
 	}
 
-	if err := json.Unmarshal(tableSchema, table); err != nil {
+	tableSchema := &TableSchema{}
+
+	if err := json.Unmarshal([]byte(query.Get("definition").(*StringValue).Get()), tableSchema); err != nil {
 		panic(fmt.Sprintf("Database can`t parse scheme %v", err))
 	}
 
-	return table
+	return tableSchema
+}
+
+func (database *Database) saveTableSchema(schema *TableSchema) error {
+	schemaTable := database.Get(SCHEMA_TABLE_NAME)
+	stringifiedSchema, _ := json.Marshal(schema)
+
+	query := &Record{Fields: []string{"name", "definition"}, Values: []Value{NewStringValue(schema.Name), NewStringValue(string(stringifiedSchema))}}
+
+	return schemaTable.Insert(query)
 }
 
 func (database *Database) validateTableSchema(schema *TableSchema) error {
 	return nil
+}
+
+func (database *Database) getNextTableId() (uint32, error) {
+	metaTable := database.Get(META_TABLE_NAME)
+	query := &Record{Fields: []string{"key", "value"}, Values: []Value{NewStringValue("next_table_id")}}
+
+	exist, err := metaTable.Get(query)
+
+	if !exist {
+		query.Set("value", NewStringValue(strconv.Itoa(MIN_UNRESERVED_TABLE_ID)))
+	}
+
+	if err != nil {
+		return 0, err
+	}
+
+	availableTableId := query.Get("value").(*StringValue).Get()
+	parsedTableId, err := strconv.Atoi(availableTableId)
+
+	if err != nil {
+		return 0, err
+	}
+
+	query.Set("value", NewStringValue(strconv.Itoa(parsedTableId+1)))
+
+	if err = metaTable.Upsert(query); err != nil {
+		return 0, err
+	}
+
+	return uint32(parsedTableId), nil
+}
+
+func (database *Database) initSystemTables() {
+
+	database.tables[META_TABLE_NAME] = &Table{
+		schema: &TableSchema{
+			Name:         META_TABLE_NAME,
+			ColumnTypes:  []ValueType{VALUE_TYPE_STRING, VALUE_TYPE_INT64},
+			ColumnNames:  []string{"key", "value"},
+			IndexColumns: []string{"key"},
+			Prefix:       1,
+		},
+		kv: database.kv,
+	}
+
+	database.tables[SCHEMA_TABLE_NAME] = &Table{
+		schema: &TableSchema{
+			Name:         SCHEMA_TABLE_NAME,
+			ColumnTypes:  []ValueType{VALUE_TYPE_STRING, VALUE_TYPE_STRING},
+			ColumnNames:  []string{"name", "definition"},
+			IndexColumns: []string{"name"},
+			Prefix:       2,
+		},
+		kv: database.kv,
+	}
 }
