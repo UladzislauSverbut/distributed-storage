@@ -91,14 +91,14 @@ func (table *Table) update(query *Record, mode int8) error {
 func (table *Table) getKey(query *Record) ([]Value, error) {
 	values := make([]Value, len(table.schema.IndexColumns))
 
-	for _, columnName := range table.schema.IndexColumns {
+	for columnPos, columnName := range table.schema.IndexColumns {
 		columnValue := query.Get(columnName)
 
 		if columnValue == nil {
 			return nil, fmt.Errorf("Table cant`t create primary key because one of index columns is missed: %s", columnName)
 		}
 
-		values = append(values, columnValue)
+		values[columnPos] = columnValue
 	}
 
 	return values, nil
@@ -126,7 +126,7 @@ func (table *Table) getPayload(query *Record) ([]Value, error) {
 			columnValue = createValue(table.schema.ColumnTypes[columnPos])
 		}
 
-		values = append(values, columnValue)
+		values[columnPos] = columnValue
 	}
 
 	return values, nil
@@ -150,6 +150,8 @@ func (table *Table) decodePayload(record *Record, encodedPayload []byte) {
 		encodedPayload = encodedPayload[columnValue.Size():]
 
 		if record.Has(columnName) {
+			record.Set(columnName, columnValue)
+		} else {
 			record.Set(columnName, columnValue)
 		}
 	}

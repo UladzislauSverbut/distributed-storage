@@ -96,7 +96,7 @@ func (database *Database) Create(schema TableSchema) (*Table, error) {
 func (database *Database) getTableSchema(tableName string) *TableSchema {
 	schemaTable := database.Get(SCHEMA_TABLE_NAME)
 
-	query := (&Record{}).Set("name", &StringValue{[]byte(tableName)})
+	query := NewRecord().Set("name", NewStringValue(tableName))
 
 	exist, err := schemaTable.Get(query)
 
@@ -121,7 +121,7 @@ func (database *Database) saveTableSchema(schema *TableSchema) error {
 	schemaTable := database.Get(SCHEMA_TABLE_NAME)
 	stringifiedSchema, _ := json.Marshal(schema)
 
-	query := &Record{Fields: []string{"name", "definition"}, Values: []Value{NewStringValue(schema.Name), NewStringValue(string(stringifiedSchema))}}
+	query := NewRecord().Set("name", NewStringValue(schema.Name)).Set("definition", NewStringValue(string(stringifiedSchema)))
 
 	return schemaTable.Insert(query)
 }
@@ -132,7 +132,7 @@ func (database *Database) validateTableSchema(schema *TableSchema) error {
 
 func (database *Database) getNextTableId() (uint32, error) {
 	metaTable := database.Get(META_TABLE_NAME)
-	query := &Record{Fields: []string{"key", "value"}, Values: []Value{NewStringValue("next_table_id")}}
+	query := NewRecord().Set("key", NewStringValue("next_table_id"))
 
 	exist, err := metaTable.Get(query)
 
