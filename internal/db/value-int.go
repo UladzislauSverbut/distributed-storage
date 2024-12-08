@@ -4,23 +4,27 @@ import (
 	"encoding/binary"
 )
 
-type IntValue struct {
-	num int64
+type SupportedInts interface {
+	int32 | int64 | uint32 | uint64
 }
 
-func (value *IntValue) Get() int64 {
+type IntValue[T SupportedInts] struct {
+	num T
+}
+
+func (value *IntValue[T]) Get() T {
 	return value.num
 }
 
-func (value *IntValue) GetType() ValueType {
+func (value *IntValue[T]) GetType() ValueType {
 	return VALUE_TYPE_INT64
 }
 
-func (value *IntValue) Size() int {
+func (value *IntValue[T]) Size() int {
 	return 8
 }
 
-func (value *IntValue) serialize() []byte {
+func (value *IntValue[T]) serialize() []byte {
 	unsignedInt := uint64(value.num) + (1 << 63)
 	serializedInt := make([]byte, 8)
 
@@ -29,12 +33,12 @@ func (value *IntValue) serialize() []byte {
 	return serializedInt
 }
 
-func (value *IntValue) parse(serializedInt []byte) {
+func (value *IntValue[T]) parse(serializedInt []byte) {
 	signedInt := uint64(binary.LittleEndian.Uint64(serializedInt)) + (1 << 63)
 
-	value.num = int64(signedInt)
+	value.num = T(signedInt)
 }
 
-func NewIntValue(value int64) *IntValue {
-	return &IntValue{value}
+func NewIntValue[T SupportedInts](value T) *IntValue[T] {
+	return &IntValue[T]{value}
 }

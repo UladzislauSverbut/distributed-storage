@@ -133,7 +133,7 @@ func (table *Table) getPayload(query *Record) ([]Value, error) {
 }
 
 func (table *Table) encodePayload(values []Value) []byte {
-	encodedPayload := make([]byte, len(values))
+	encodedPayload := make([]byte, 0)
 
 	for _, value := range values {
 		encodedPayload = append(encodedPayload, value.serialize()...)

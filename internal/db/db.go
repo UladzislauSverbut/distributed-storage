@@ -4,7 +4,6 @@ import (
 	"distributed-storage/internal/kv"
 	"encoding/json"
 	"fmt"
-	"strconv"
 )
 
 const DEFAULT_DIRECTORY = "/var/lib/kv/data"
@@ -137,27 +136,26 @@ func (database *Database) getNextTableId() (uint32, error) {
 	exist, err := metaTable.Get(query)
 
 	if !exist {
-		query.Set("value", NewStringValue(strconv.Itoa(MIN_UNRESERVED_TABLE_ID)))
+		query.Set("value", NewIntValue[uint32](MIN_UNRESERVED_TABLE_ID))
 	}
 
 	if err != nil {
 		return 0, err
 	}
 
-	availableTableId := query.Get("value").(*StringValue).Get()
-	parsedTableId, err := strconv.Atoi(availableTableId)
+	availableTableId := query.Get("value").(*IntValue[uint32]).Get()
 
 	if err != nil {
 		return 0, err
 	}
 
-	query.Set("value", NewStringValue(strconv.Itoa(parsedTableId+1)))
+	query.Set("value", NewIntValue[uint32](availableTableId+1))
 
 	if err = metaTable.Upsert(query); err != nil {
 		return 0, err
 	}
 
-	return uint32(parsedTableId), nil
+	return availableTableId, nil
 }
 
 func (database *Database) initSystemTables() {
@@ -165,7 +163,7 @@ func (database *Database) initSystemTables() {
 	database.tables[META_TABLE_NAME] = &Table{
 		schema: &TableSchema{
 			Name:         META_TABLE_NAME,
-			ColumnTypes:  []ValueType{VALUE_TYPE_STRING, VALUE_TYPE_INT64},
+			ColumnTypes:  []ValueType{VALUE_TYPE_STRING, VALUE_TYPE_UINT32},
 			ColumnNames:  []string{"key", "value"},
 			IndexColumns: []string{"key"},
 			Prefix:       1,

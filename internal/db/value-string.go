@@ -42,7 +42,7 @@ func (value *StringValue) serialize() []byte {
 
 func (value *StringValue) parse(serializedString []byte) {
 	stringLength := bytes.Index(serializedString, []byte{0})
-	escapeSymbolsCount := bytes.Count(value.str[:stringLength], []byte{0x01, 0x01}) + bytes.Count(value.str[:stringLength], []byte{0x01, 0x02})
+	escapeSymbolsCount := bytes.Count(serializedString[:stringLength], []byte{0x01, 0x01}) + bytes.Count(serializedString[:stringLength], []byte{0x01, 0x02})
 
 	value.str = make([]byte, stringLength-escapeSymbolsCount)
 
