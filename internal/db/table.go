@@ -55,6 +55,16 @@ func (table *Table) Upsert(query *Record) error {
 	return table.update(query, MODE_UPSERT)
 }
 
+func (table *Table) Delete(query *Record) error {
+	key, err := table.getKey(query)
+
+	if err != nil {
+		return err
+	}
+
+	return table.kv.Delete(table.encodeKey(key))
+}
+
 func (table *Table) update(query *Record, mode int8) error {
 	key, err := table.getKey(query)
 
