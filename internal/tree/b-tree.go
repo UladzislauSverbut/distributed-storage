@@ -31,6 +31,7 @@ func NewBTree(storage StorageAdapter, config BTreeConfig) *BTree {
 		root:    storage.Root(),
 	}
 }
+
 func (tree *BTree) Get(key []byte) ([]byte, error) {
 	if len(key) > tree.config.MaxKeySize {
 		return nil, fmt.Errorf("BTree supports only keys within the size %d", tree.config.MaxKeySize)

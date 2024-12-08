@@ -16,7 +16,7 @@ type PageStore struct {
 	data     []byte
 }
 
-func newPageStore(pagesize int, data []byte) *PageStore {
+func NewPageStore(pagesize int, data []byte) *PageStore {
 	return &PageStore{
 		pageSize: pagesize,
 		data:     data,

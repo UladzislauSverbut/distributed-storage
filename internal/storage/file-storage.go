@@ -185,7 +185,7 @@ func (storage *FileStorage) findFreedPage() PagePointer {
 	storage.freedPagesNumber -= 1
 
 	pageStorePointer := storage.freedPages
-	pagesStore := newPageStore(storage.pageSize, storage.GetPage(pageStorePointer))
+	pagesStore := NewPageStore(storage.pageSize, storage.GetPage(pageStorePointer))
 
 	if pagesStore.getNumberOfAvailablePages() > 0 {
 		return pagesStore.getAvailablePage()
@@ -199,7 +199,7 @@ func (storage *FileStorage) findFreedPage() PagePointer {
 func (storage *FileStorage) addFreedPage(pointer PagePointer) {
 	storage.freedPagesNumber += 1
 
-	pagesStore := newPageStore(storage.pageSize, storage.GetPage(storage.freedPages))
+	pagesStore := NewPageStore(storage.pageSize, storage.GetPage(storage.freedPages))
 
 	for pagesStore.isFull() {
 		if pagesStore.getNext() == PagePointer(0) {
@@ -207,7 +207,7 @@ func (storage *FileStorage) addFreedPage(pointer PagePointer) {
 			return
 		}
 
-		pagesStore = newPageStore(storage.pageSize, storage.GetPage(pagesStore.getNext()))
+		pagesStore = NewPageStore(storage.pageSize, storage.GetPage(pagesStore.getNext()))
 	}
 
 	pagesStore.addAvailablePage(pointer)
