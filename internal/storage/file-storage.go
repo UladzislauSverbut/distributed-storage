@@ -27,7 +27,7 @@ type FileStorage struct {
 	allocatedPages   map[PagePointer][]byte //map of memory allocated pages
 }
 
-const STORAGE_SIGNATURE = "B_TREE_FILE_SIGN"
+const STORAGE_SIGNATURE = "FILE_STORAGE_SIG"
 
 // we book one file system storage page for storing information about number of used and freed pages
 // we call this page as "master"
@@ -184,33 +184,33 @@ func (storage *FileStorage) findFreedPage() PagePointer {
 
 	storage.freedPagesNumber -= 1
 
-	pageStorePointer := storage.freedPages
-	pagesStore := NewPageStore(storage.pageSize, storage.GetPage(pageStorePointer))
+	pagerPointer := storage.freedPages
+	pager := NewPager(storage.pageSize, storage.GetPage(pagerPointer))
 
-	if pagesStore.getNumberOfAvailablePages() > 0 {
-		return pagesStore.getAvailablePage()
+	if pager.getNumberOfAvailablePages() > 0 {
+		return pager.getAvailablePage()
 	}
 
-	storage.freedPages = pagesStore.getNext()
+	storage.freedPages = pager.getNext()
 
-	return pageStorePointer
+	return pagerPointer
 }
 
 func (storage *FileStorage) addFreedPage(pointer PagePointer) {
 	storage.freedPagesNumber += 1
 
-	pagesStore := NewPageStore(storage.pageSize, storage.GetPage(storage.freedPages))
+	pager := NewPager(storage.pageSize, storage.GetPage(storage.freedPages))
 
-	for pagesStore.isFull() {
-		if pagesStore.getNext() == PagePointer(0) {
-			pagesStore.setNext(pointer)
+	for pager.isFull() {
+		if pager.getNext() == PagePointer(0) {
+			pager.setNext(pointer)
 			return
 		}
 
-		pagesStore = NewPageStore(storage.pageSize, storage.GetPage(pagesStore.getNext()))
+		pager = NewPager(storage.pageSize, storage.GetPage(pager.getNext()))
 	}
 
-	pagesStore.addAvailablePage(pointer)
+	pager.addAvailablePage(pointer)
 }
 
 func (storage *FileStorage) setNumberOfPages(numberOfPages int) error {
