@@ -136,7 +136,6 @@ func (storage *FileStorage) CreatePage() PagePointer {
 }
 
 func (storage *FileStorage) DeletePage(pointer PagePointer) {
-	storage.allocatedPages[pointer] = make([]byte, storage.pageSize)
 	storage.addFreedPage(pointer)
 }
 
@@ -296,7 +295,7 @@ func (storage *FileStorage) splitFile(desireNumberOfPages int) error {
 		return fmt.Errorf("FileSystem storage can`t add chunks: %w", err)
 	}
 
-	storage.fileMemorySize = len(chunk)
+	storage.fileMemorySize += len(chunk)
 	storage.fileMemory = append(storage.fileMemory, chunk)
 
 	return nil

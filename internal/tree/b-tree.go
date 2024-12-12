@@ -68,10 +68,9 @@ func (tree *BTree) Set(key []byte, value []byte) error {
 	}
 
 	rootNode := tree.storage.Get(tree.root)
+	rootNode = tree.setKeyValue(rootNode, key, value)
 
 	tree.storage.Delete(tree.root)
-
-	rootNode = tree.setKeyValue(rootNode, key, value)
 
 	if int(rootNode.size()) > tree.config.PageSize {
 		splittedNodes := tree.splitNode(rootNode)
@@ -339,7 +338,7 @@ func (tree *BTree) splitNode(node *BNode) []*BNode {
 func (tree *BTree) mergeNodes(first *BNode, second *BNode) *BNode {
 	mergedNode := &BNode{data: make([]byte, tree.config.PageSize)}
 
-	mergedNode.setHeader(first.getType(), first.getStoredKeysNumber()+first.getStoredKeysNumber())
+	mergedNode.setHeader(first.getType(), first.getStoredKeysNumber()+second.getStoredKeysNumber())
 
 	mergedNode.copy(first, 0, 0, first.getStoredKeysNumber())
 	mergedNode.copy(second, 0, first.getStoredKeysNumber(), second.getStoredKeysNumber())
