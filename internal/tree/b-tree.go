@@ -283,9 +283,11 @@ func (tree *BTree) mergeParentChildren(node *BNode, newChild *BNode, position BN
 			leftChild := tree.storage.Get(leftChildPointer)
 
 			if int(leftChild.size()+newChild.size()) < tree.config.PageSize-HEADER_SIZE {
+				updatedParent := tree.replaceParentChildren(node, []*BNode{tree.mergeNodes(leftChild, newChild)}, position-1, 2)
+
 				tree.storage.Delete(leftChildPointer)
 
-				return tree.replaceParentChildren(node, []*BNode{tree.mergeNodes(leftChild, newChild)}, position-1, 2)
+				return updatedParent
 			}
 		}
 
@@ -294,9 +296,11 @@ func (tree *BTree) mergeParentChildren(node *BNode, newChild *BNode, position BN
 			rightChild := tree.storage.Get(rightChildPointer)
 
 			if int(rightChild.size()+newChild.size()) < tree.config.PageSize-HEADER_SIZE {
+				updatedParent := tree.replaceParentChildren(node, []*BNode{tree.mergeNodes(newChild, rightChild)}, position, 2)
+
 				tree.storage.Delete(rightChildPointer)
 
-				return tree.replaceParentChildren(node, []*BNode{tree.mergeNodes(newChild, rightChild)}, position, 2)
+				return updatedParent
 			}
 		}
 	}

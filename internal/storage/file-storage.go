@@ -9,6 +9,8 @@ import (
 	"os"
 )
 
+const NULL_PAGE = PagePointer(0)
+
 type PagePointer = uint64
 
 type File struct {
@@ -17,14 +19,14 @@ type File struct {
 }
 
 type FileStorage struct {
-	file             File
-	fileMemory       [][]byte
-	fileMemorySize   int
-	pageSize         int
-	pagesNumber      int
-	freedPagesNumber int
-	freedPages       PagePointer            //pointer to page store of freed pages
-	allocatedPages   map[PagePointer][]byte //map of memory allocated pages
+	file                File
+	fileMemory          [][]byte
+	fileMemorySize      int
+	pageSize            int
+	pagesNumber         int
+	releasedPagesNumber int
+	releasedPages       PagePointer            //pointer to store of released pages
+	allocatedPages      map[PagePointer][]byte //map of memory allocated pages
 }
 
 const STORAGE_SIGNATURE = "FILE_STORAGE_SIG"
@@ -70,12 +72,12 @@ func NewFileStorage(file *os.File, pageSize int) (*FileStorage, error) {
 			pointer: file,
 			size:    fileSize,
 		},
-		fileMemory:       [][]byte{virtualMemory},
-		fileMemorySize:   fileSize,
-		pageSize:         pageSize,
-		pagesNumber:      0,
-		freedPagesNumber: 0,
-		allocatedPages:   map[PagePointer][]byte{},
+		fileMemory:          [][]byte{virtualMemory},
+		fileMemorySize:      fileSize,
+		pageSize:            pageSize,
+		pagesNumber:         0,
+		releasedPagesNumber: 0,
+		allocatedPages:      map[PagePointer][]byte{},
 	}
 
 	if firstInitialization {
@@ -84,7 +86,7 @@ func NewFileStorage(file *os.File, pageSize int) (*FileStorage, error) {
 			return nil, err
 		}
 
-		fs.freedPages = fs.CreatePage()
+		fs.releasedPages = fs.CreatePage()
 	} else {
 		if err = fs.parseMasterPage(); err != nil {
 			return nil, err
@@ -124,7 +126,7 @@ func (storage *FileStorage) GetPage(pointer PagePointer) []byte {
 }
 
 func (storage *FileStorage) CreatePage() PagePointer {
-	if pagePointer := storage.findFreedPage(); pagePointer != PagePointer(0) {
+	if pagePointer := storage.findReleasedPage(); pagePointer != NULL_PAGE {
 		return pagePointer
 	}
 
@@ -136,7 +138,7 @@ func (storage *FileStorage) CreatePage() PagePointer {
 }
 
 func (storage *FileStorage) DeletePage(pointer PagePointer) {
-	storage.addFreedPage(pointer)
+	storage.addReleasedPage(pointer)
 }
 
 func (storage *FileStorage) SavePages() error {
@@ -160,7 +162,7 @@ func (storage *FileStorage) GetNumberOfPages() int {
 }
 
 func (storage *FileStorage) getFilePage(pointer PagePointer) []byte {
-	firstPagePointer := PagePointer(0)
+	firstPagePointer := NULL_PAGE
 
 	for _, memorySegment := range storage.fileMemory {
 		lastPagePointer := firstPagePointer + uint64(len(memorySegment)/storage.pageSize)
@@ -176,40 +178,39 @@ func (storage *FileStorage) getFilePage(pointer PagePointer) []byte {
 	panic(fmt.Sprintf("FileSystem storage cant find unstored page %d", pointer))
 }
 
-func (storage *FileStorage) findFreedPage() PagePointer {
-	if storage.freedPagesNumber == 0 {
-		return PagePointer(0)
+func (storage *FileStorage) findReleasedPage() PagePointer {
+	if storage.releasedPagesNumber == 0 {
+		return NULL_PAGE
 	}
 
-	storage.freedPagesNumber -= 1
+	storage.releasedPagesNumber -= 1
 
-	pagerPointer := storage.freedPages
-	pager := NewPager(storage.pageSize, storage.GetPage(pagerPointer))
+	pageStorePointer := storage.releasedPages
+	pageStore := NewPageStore(storage.pageSize, storage.GetPage(pageStorePointer))
 
-	if pager.getNumberOfAvailablePages() > 0 {
-		return pager.getAvailablePage()
+	if pageStore.getNumberOfAvailablePages() > 0 {
+		return pageStore.getAvailablePage()
 	}
 
-	storage.freedPages = pager.getNext()
+	storage.releasedPages = pageStore.getPrevious()
 
-	return pagerPointer
+	return pageStorePointer
 }
 
-func (storage *FileStorage) addFreedPage(pointer PagePointer) {
-	storage.freedPagesNumber += 1
+func (storage *FileStorage) addReleasedPage(pointer PagePointer) {
+	storage.releasedPagesNumber += 1
 
-	pager := NewPager(storage.pageSize, storage.GetPage(storage.freedPages))
+	pageStore := NewPageStore(storage.pageSize, storage.GetPage(storage.releasedPages))
 
-	for pager.isFull() {
-		if pager.getNext() == PagePointer(0) {
-			pager.setNext(pointer)
-			return
-		}
+	for pageStore.isFull() {
+		pageStorePointer := storage.CreatePage()
+		pageStore = NewPageStore(storage.pageSize, storage.GetPage(storage.releasedPages))
 
-		pager = NewPager(storage.pageSize, storage.GetPage(pager.getNext()))
+		pageStore.setPrevious(storage.releasedPages)
+		storage.releasedPages = pageStorePointer
 	}
 
-	pager.addAvailablePage(pointer)
+	pageStore.addAvailablePage(pointer)
 }
 
 func (storage *FileStorage) setNumberOfPages(numberOfPages int) error {
@@ -262,24 +263,24 @@ func (storage *FileStorage) saveMasterPage() {
 
 	copy(masterPage[0:16], []byte(STORAGE_SIGNATURE))
 	binary.LittleEndian.PutUint64(masterPage[16:], uint64(storage.pagesNumber))
-	binary.LittleEndian.PutUint64(masterPage[24:], uint64(storage.freedPagesNumber))
-	binary.LittleEndian.PutUint64(masterPage[32:], uint64(storage.freedPages))
+	binary.LittleEndian.PutUint64(masterPage[24:], uint64(storage.releasedPagesNumber))
+	binary.LittleEndian.PutUint64(masterPage[32:], uint64(storage.releasedPages))
 }
 
 func (storage *FileStorage) parseMasterPage() error {
 	masterPage := storage.GetPage(PagePointer(0))
 	fileSignature := masterPage[0:16]
 	pagesNumber := binary.LittleEndian.Uint64((masterPage[16:]))
-	freedPagesNumber := binary.LittleEndian.Uint64((masterPage[24:]))
-	freedPages := binary.LittleEndian.Uint64((masterPage[32:]))
+	releasedPagesNumber := binary.LittleEndian.Uint64((masterPage[24:]))
+	releasedPages := binary.LittleEndian.Uint64((masterPage[32:]))
 
 	if !bytes.Equal([]byte(STORAGE_SIGNATURE), fileSignature) {
 		return errors.New("FileSystem storage file is corrupted")
 	}
 
 	storage.pagesNumber = int(pagesNumber)
-	storage.freedPagesNumber = int(freedPagesNumber)
-	storage.freedPages = freedPages
+	storage.releasedPagesNumber = int(releasedPagesNumber)
+	storage.releasedPages = releasedPages
 
 	return nil
 }
