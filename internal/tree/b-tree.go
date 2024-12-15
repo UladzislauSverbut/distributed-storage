@@ -37,7 +37,7 @@ func (tree *BTree) Get(key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("BTree supports only keys within the size %d", tree.config.MaxKeySize)
 	}
 
-	if tree.root == BNodePointer(0) {
+	if tree.root == NULL_NODE {
 		return nil, nil
 	}
 
@@ -57,7 +57,7 @@ func (tree *BTree) Set(key []byte, value []byte) error {
 		return fmt.Errorf("BTree supports only keys within the size %d", tree.config.MaxKeySize)
 	}
 
-	if tree.root == BNodePointer(0) {
+	if tree.root == NULL_NODE {
 		rootNode := &BNode{data: make([]byte, tree.config.PageSize)}
 		rootNode.setHeader(BNODE_LEAF, 1)
 		rootNode.appendKeyValue(key, value)
@@ -69,8 +69,6 @@ func (tree *BTree) Set(key []byte, value []byte) error {
 
 	rootNode := tree.storage.Get(tree.root)
 	rootNode = tree.setKeyValue(rootNode, key, value)
-
-	tree.storage.Delete(tree.root)
 
 	if int(rootNode.size()) > tree.config.PageSize {
 		splittedNodes := tree.splitNode(rootNode)
@@ -84,6 +82,7 @@ func (tree *BTree) Set(key []byte, value []byte) error {
 		}
 	}
 
+	tree.storage.Delete(tree.root)
 	tree.root = tree.storage.Create(rootNode)
 
 	return nil
@@ -94,7 +93,7 @@ func (tree *BTree) Delete(key []byte) error {
 		return fmt.Errorf("BTree supports only keys within the size %d", tree.config.PageSize)
 	}
 
-	if tree.root == BNodePointer(0) {
+	if tree.root == NULL_NODE {
 		return nil
 	}
 

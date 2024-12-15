@@ -7,6 +7,8 @@ import (
 
 const HEADER_SIZE = 4
 
+const NULL_NODE = BNodePointer(0)
+
 const (
 	BNODE_PARENT BNodeType = iota
 	BNODE_LEAF

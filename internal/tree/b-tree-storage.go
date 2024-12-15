@@ -47,7 +47,7 @@ func (treeStorage *BTreeFileStorage) Root() BNodePointer {
 		return binary.LittleEndian.Uint64(treeStorage.fs.GetMetaInfo())
 	}
 
-	return BNodePointer(0)
+	return NULL_NODE
 }
 
 func (treeStorage *BTreeFileStorage) Get(pointer BNodePointer) *BNode {
