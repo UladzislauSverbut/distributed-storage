@@ -16,12 +16,11 @@ func (iterator *BTreeIterator) Get() ([]byte, []byte) {
 	position := path.position
 
 	return parent.getKey(position), parent.getValue(position)
-
 }
 
-func (iterator *BTreeIterator) Next() bool {
-	if iterator.isLastNode() {
-		return false
+func (iterator *BTreeIterator) Next() {
+	if !iterator.HasNext() {
+		return
 	}
 
 	parent, position := iterator.getCurrentParent()
@@ -31,13 +30,11 @@ func (iterator *BTreeIterator) Next() bool {
 	} else {
 		iterator.moveToRightSiblingNode()
 	}
-
-	return true
 }
 
-func (iterator *BTreeIterator) Prev() bool {
-	if iterator.isFirstNode() {
-		return false
+func (iterator *BTreeIterator) Prev() {
+	if !iterator.HasPrev() {
+
 	}
 
 	_, position := iterator.getCurrentParent()
@@ -47,8 +44,28 @@ func (iterator *BTreeIterator) Prev() bool {
 	} else {
 		iterator.moveToLeftSiblingNode()
 	}
+}
 
-	return true
+func (iterator *BTreeIterator) HasNext() bool {
+	for pathIndex := len(iterator.path) - 1; pathIndex >= 0; pathIndex-- {
+		nodePosition := iterator.path[pathIndex]
+
+		if nodePosition.parent.getStoredKeysNumber()-1 != nodePosition.position {
+			return true
+		}
+	}
+	return false
+}
+
+func (iterator *BTreeIterator) HasPrev() bool {
+	for pathIndex := len(iterator.path) - 1; pathIndex >= 0; pathIndex-- {
+		nodePosition := iterator.path[pathIndex]
+
+		if nodePosition.position != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (iterator *BTreeIterator) getCurrentParent() (*BNode, BNodeKeyPosition) {
@@ -99,26 +116,4 @@ func (iterator *BTreeIterator) moveToRightSiblingNode() {
 
 func (iterator *BTreeIterator) moveToLeftSiblingNode() {
 	iterator.path[len(iterator.path)-1].position--
-}
-
-func (iterator *BTreeIterator) isLastNode() bool {
-	for pathIndex := len(iterator.path) - 1; pathIndex >= 0; pathIndex-- {
-		nodePosition := iterator.path[pathIndex]
-
-		if nodePosition.parent.getStoredKeysNumber()-1 != nodePosition.position {
-			return false
-		}
-	}
-	return false
-}
-
-func (iterator *BTreeIterator) isFirstNode() bool {
-	for pathIndex := len(iterator.path) - 1; pathIndex >= 0; pathIndex-- {
-		nodePosition := iterator.path[pathIndex]
-
-		if nodePosition.position != 0 {
-			return false
-		}
-	}
-	return false
 }
