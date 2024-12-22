@@ -1,67 +1,124 @@
 package tree
 
-type BTreeExplorer struct {
-	tree *BTree
-}
-
-func (explorer *BTreeExplorer) Seek(key []byte) *BTreeIterator {
-	tree := explorer.tree
-	iterator := &BTreeIterator{tree: tree}
-
-	for nodePointer := tree.root; nodePointer != NULL_NODE; {
-		node := tree.storage.Get(nodePointer)
-		lessOrEqualNodePointer := tree.getLessOrEqualKeyPosition(node, key)
-
-		iterator.path = append(iterator.path, node)
-		iterator.position = append(iterator.position, lessOrEqualNodePointer)
-
-		if node.getType() == BNODE_PARENT {
-			nodePointer = node.getChildPointer(lessOrEqualNodePointer)
-		} else {
-			nodePointer = NULL_NODE
-		}
-	}
-
-	return iterator
+type NodePosition struct {
+	parent   *BNode
+	position BNodeKeyPosition
 }
 
 type BTreeIterator struct {
-	tree     *BTree
-	path     []*BNode
-	position []uint16
+	tree *BTree
+	path []*NodePosition
 }
 
-func (tree *BTreeIterator) Value() ([]byte, []byte) {
-	return nil, nil
+func (iterator *BTreeIterator) Get() ([]byte, []byte) {
+	path := iterator.path[len(iterator.path)]
+	parent := path.parent
+	position := path.position
+
+	return parent.getKey(position), parent.getValue(position)
+
 }
 
-func (iterator *BTreeIterator) Next() {
-
-}
-
-func (iterator *BTreeIterator) Prev() {
-	iterator.moveCursorToLeftSibling(len(iterator.path) - 1)
-}
-
-func (iterator *BTreeIterator) moveCursorToLeftSibling(level int) {
-	switch {
-	case iterator.position[level] > 0:
-		{
-			iterator.position[level]--
-		}
-	case level > 0:
-		{
-			iterator.moveCursorToLeftSibling(level - 1)
-		}
-	default:
-		return
+func (iterator *BTreeIterator) Next() bool {
+	if iterator.isLastNode() {
+		return false
 	}
 
-	if level+1 < len(iterator.position) {
-		node := iterator.path[level]
-		childNode := iterator.tree.storage.Get(node.getChildPointer(iterator.position[level]))
+	parent, position := iterator.getCurrentParent()
 
-		iterator.path[level+1] = childNode
-		iterator.position[level+1] = childNode.getStoredKeysNumber() - 1
+	if parent.getStoredKeysNumber()-1 == position {
+		iterator.moveToRightSiblingParent()
+	} else {
+		iterator.moveToRightSiblingNode()
 	}
+
+	return true
+}
+
+func (iterator *BTreeIterator) Prev() bool {
+	if iterator.isFirstNode() {
+		return false
+	}
+
+	_, position := iterator.getCurrentParent()
+
+	if position == 0 {
+		iterator.moveToLeftSiblingParent()
+	} else {
+		iterator.moveToLeftSiblingNode()
+	}
+
+	return true
+}
+
+func (iterator *BTreeIterator) getCurrentParent() (*BNode, BNodeKeyPosition) {
+	path := iterator.path[len(iterator.path)-1]
+
+	return path.parent, path.position
+}
+
+func (iterator *BTreeIterator) moveToRightSiblingParent() {
+	parent, position := iterator.getCurrentParent()
+
+	for parent.getStoredKeysNumber()-1 == position {
+		iterator.path = iterator.path[0 : len(iterator.path)-2]
+		parent, position = iterator.getCurrentParent()
+	}
+
+	for node := iterator.tree.storage.Get(parent.getChildPointer(position)); node.getType() == BNODE_PARENT; {
+		iterator.path = append(iterator.path, &NodePosition{
+			parent:   node,
+			position: BNodeKeyPosition(0),
+		})
+
+		parent, position = iterator.getCurrentParent()
+	}
+}
+
+func (iterator *BTreeIterator) moveToLeftSiblingParent() {
+	parent, position := iterator.getCurrentParent()
+
+	for position == 0 {
+		iterator.path = iterator.path[0 : len(iterator.path)-2]
+		parent, position = iterator.getCurrentParent()
+	}
+
+	for node := iterator.tree.storage.Get(parent.getChildPointer(position)); node.getType() == BNODE_PARENT; {
+		iterator.path = append(iterator.path, &NodePosition{
+			parent:   node,
+			position: BNodeKeyPosition(node.getStoredKeysNumber() - 1),
+		})
+
+		parent, position = iterator.getCurrentParent()
+	}
+}
+
+func (iterator *BTreeIterator) moveToRightSiblingNode() {
+	iterator.path[len(iterator.path)-1].position++
+}
+
+func (iterator *BTreeIterator) moveToLeftSiblingNode() {
+	iterator.path[len(iterator.path)-1].position--
+}
+
+func (iterator *BTreeIterator) isLastNode() bool {
+	for pathIndex := len(iterator.path) - 1; pathIndex >= 0; pathIndex-- {
+		nodePosition := iterator.path[pathIndex]
+
+		if nodePosition.parent.getStoredKeysNumber()-1 != nodePosition.position {
+			return false
+		}
+	}
+	return false
+}
+
+func (iterator *BTreeIterator) isFirstNode() bool {
+	for pathIndex := len(iterator.path) - 1; pathIndex >= 0; pathIndex-- {
+		nodePosition := iterator.path[pathIndex]
+
+		if nodePosition.position != 0 {
+			return false
+		}
+	}
+	return false
 }
