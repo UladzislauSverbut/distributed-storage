@@ -11,7 +11,7 @@ type BTreeIterator struct {
 }
 
 func (iterator *BTreeIterator) Get() ([]byte, []byte) {
-	path := iterator.path[len(iterator.path)]
+	path := iterator.path[len(iterator.path)-1]
 	parent := path.parent
 	position := path.position
 
@@ -34,7 +34,7 @@ func (iterator *BTreeIterator) Next() {
 
 func (iterator *BTreeIterator) Prev() {
 	if !iterator.HasPrev() {
-
+		return
 	}
 
 	_, position := iterator.getCurrentParent()
@@ -78,17 +78,19 @@ func (iterator *BTreeIterator) moveToRightSiblingParent() {
 	parent, position := iterator.getCurrentParent()
 
 	for parent.getStoredKeysNumber()-1 == position {
-		iterator.path = iterator.path[0 : len(iterator.path)-2]
-		parent, position = iterator.getCurrentParent()
+		parent, position = iterator.moveToPreviousParent()
 	}
 
-	for node := iterator.tree.storage.Get(parent.getChildPointer(position)); node.getType() == BNODE_PARENT; {
-		iterator.path = append(iterator.path, &NodePosition{
-			parent:   node,
-			position: BNodeKeyPosition(0),
-		})
+	_, position = iterator.moveToRightSiblingNode()
 
-		parent, position = iterator.getCurrentParent()
+	for parent.getType() == BNODE_PARENT {
+		parent = iterator.tree.storage.Get(parent.getChildPointer(position))
+		position = BNodeKeyPosition(0)
+
+		iterator.path = append(iterator.path, &NodePosition{
+			parent:   parent,
+			position: position,
+		})
 	}
 }
 
@@ -96,24 +98,37 @@ func (iterator *BTreeIterator) moveToLeftSiblingParent() {
 	parent, position := iterator.getCurrentParent()
 
 	for position == 0 {
-		iterator.path = iterator.path[0 : len(iterator.path)-2]
+		iterator.path = iterator.path[0 : len(iterator.path)-1]
 		parent, position = iterator.getCurrentParent()
 	}
 
-	for node := iterator.tree.storage.Get(parent.getChildPointer(position)); node.getType() == BNODE_PARENT; {
+	_, position = iterator.moveToLeftSiblingNode()
+
+	for parent.getType() == BNODE_PARENT {
+		parent = iterator.tree.storage.Get(parent.getChildPointer(position))
+		position = parent.getStoredKeysNumber() - 1
+
 		iterator.path = append(iterator.path, &NodePosition{
-			parent:   node,
-			position: BNodeKeyPosition(node.getStoredKeysNumber() - 1),
+			parent:   parent,
+			position: position,
 		})
-
-		parent, position = iterator.getCurrentParent()
 	}
 }
 
-func (iterator *BTreeIterator) moveToRightSiblingNode() {
+func (iterator *BTreeIterator) moveToRightSiblingNode() (*BNode, BNodeKeyPosition) {
 	iterator.path[len(iterator.path)-1].position++
+
+	return iterator.getCurrentParent()
 }
 
-func (iterator *BTreeIterator) moveToLeftSiblingNode() {
+func (iterator *BTreeIterator) moveToLeftSiblingNode() (*BNode, BNodeKeyPosition) {
 	iterator.path[len(iterator.path)-1].position--
+
+	return iterator.getCurrentParent()
+}
+
+func (iterator *BTreeIterator) moveToPreviousParent() (*BNode, BNodeKeyPosition) {
+	iterator.path = iterator.path[0 : len(iterator.path)-1]
+
+	return iterator.getCurrentParent()
 }
