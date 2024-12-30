@@ -93,9 +93,7 @@ func (table *Table) update(query *Record, mode int8) error {
 		return err
 	}
 
-	table.kv.Set(encodedKey, table.encodePayload(payload))
-
-	return nil
+	return table.kv.Set(encodedKey, table.encodePayload(payload))
 }
 
 func (table *Table) getKey(query *Record) ([]Value, error) {
