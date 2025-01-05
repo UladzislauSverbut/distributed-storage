@@ -23,27 +23,45 @@ func NewKeyValue(filePath string) (*KeyValue, error) {
 	}
 
 	return &KeyValue{
-		tree:    tree.NewBTree(storage, config),
+		tree:    tree.NewBTree(storage.Root(), storage, config),
 		storage: storage,
 	}, nil
 }
 
-func (kv *KeyValue) Get(key []byte) ([]byte, error) {
-	return kv.tree.Get(key)
+func (kv *KeyValue) Get(request *GetRequest) (*GetResponse, error) {
+	value, err := kv.tree.Get(request.Key)
+
+	return &GetResponse{value}, err
 }
 
-func (kv *KeyValue) Set(key []byte, value []byte) error {
-	if err := kv.tree.Set(key, value); err != nil {
-		return err
+func (kv *KeyValue) Set(request *SetRequest) (*SetResponse, error) {
+	oldValue, err := kv.tree.Set(request.Key, request.Value)
+
+	if err != nil {
+		return &SetResponse{}, err
 	}
 
-	return kv.storage.Save(kv.tree)
+	if err = kv.storage.Save(kv.tree); err != nil {
+		return &SetResponse{}, err
+	}
+
+	if oldValue != nil {
+		return &SetResponse{Updated: true, OldValue: oldValue}, nil
+	}
+
+	return &SetResponse{Added: true}, nil
 }
 
-func (kv *KeyValue) Delete(key []byte) error {
-	if err := kv.tree.Delete(key); err != nil {
-		return err
+func (kv *KeyValue) Delete(request *DeleteRequest) (*DeleteResponse, error) {
+	oldValue, err := kv.tree.Delete(request.Key)
+
+	if err != nil {
+		return &DeleteResponse{}, nil
 	}
 
-	return kv.storage.Save(kv.tree)
+	if err = kv.storage.Save(kv.tree); err != nil {
+		return &DeleteResponse{}, nil
+	}
+
+	return &DeleteResponse{OldValue: oldValue}, nil
 }

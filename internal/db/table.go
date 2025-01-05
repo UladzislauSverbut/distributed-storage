@@ -13,11 +13,12 @@ const (
 )
 
 type TableSchema struct {
-	Name         string
-	ColumnTypes  []ValueType
-	ColumnNames  []string
-	IndexColumns []string
-	Prefix       uint32
+	Name                  string
+	ColumnTypes           []ValueType
+	ColumnNames           []string
+	IndexColumns          []string
+	SecondaryIndexColumns []string
+	Prefix                uint32
 }
 
 type Table struct {
@@ -32,13 +33,13 @@ func (table *Table) Get(query *Record) (bool, error) {
 		return false, err
 	}
 
-	encodedPayload, err := table.kv.Get(table.encodeKey(key))
+	getResponse, err := table.kv.Get(&kv.GetRequest{Key: table.encodeKey(key)})
 
-	if encodedPayload == nil {
+	if getResponse.Value == nil {
 		return false, err
 	}
 
-	table.decodePayload(query, encodedPayload)
+	table.decodePayload(query, getResponse.Value)
 
 	return true, nil
 }
@@ -62,7 +63,9 @@ func (table *Table) Delete(query *Record) error {
 		return err
 	}
 
-	return table.kv.Delete(table.encodeKey(key))
+	_, err = table.kv.Delete(&kv.DeleteRequest{Key: table.encodeKey(key)})
+
+	return err
 }
 
 func (table *Table) update(query *Record, mode int8) error {
@@ -73,17 +76,17 @@ func (table *Table) update(query *Record, mode int8) error {
 	}
 
 	encodedKey := table.encodeKey(key)
-	encodedPayload, err := table.kv.Get(encodedKey)
+	getResponse, err := table.kv.Get(&kv.GetRequest{Key: encodedKey})
 
 	if err != nil {
 		return err
 	}
 
-	if mode == MODE_UPDATE && encodedPayload == nil {
+	if mode == MODE_UPDATE && getResponse.Value == nil {
 		return fmt.Errorf("Table can`t update record because it`s not exist: %v", query)
 	}
 
-	if mode == MODE_INSERT && encodedPayload != nil {
+	if mode == MODE_INSERT && getResponse.Value != nil {
 		return fmt.Errorf("Table can`t insert record because it`s exist: %v", query)
 	}
 
@@ -93,7 +96,9 @@ func (table *Table) update(query *Record, mode int8) error {
 		return err
 	}
 
-	return table.kv.Set(encodedKey, table.encodePayload(payload))
+	_, err = table.kv.Set(&kv.SetRequest{Key: encodedKey, Value: table.encodePayload(payload)})
+
+	return err
 }
 
 func (table *Table) getKey(query *Record) ([]Value, error) {
