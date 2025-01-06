@@ -159,13 +159,12 @@ func (database *Database) getNextTableId() (uint32, error) {
 }
 
 func (database *Database) initSystemTables() {
-
 	database.tables[META_TABLE_NAME] = &Table{
 		schema: &TableSchema{
 			Name:         META_TABLE_NAME,
 			ColumnTypes:  []ValueType{VALUE_TYPE_STRING, VALUE_TYPE_UINT32},
 			ColumnNames:  []string{"key", "value"},
-			IndexColumns: []string{"key"},
+			PrimaryIndex: []string{"key"},
 			Prefix:       1,
 		},
 		kv: database.kv,
@@ -176,7 +175,7 @@ func (database *Database) initSystemTables() {
 			Name:         SCHEMA_TABLE_NAME,
 			ColumnTypes:  []ValueType{VALUE_TYPE_STRING, VALUE_TYPE_STRING},
 			ColumnNames:  []string{"name", "definition"},
-			IndexColumns: []string{"name"},
+			PrimaryIndex: []string{"name"},
 			Prefix:       2,
 		},
 		kv: database.kv,

@@ -12,13 +12,15 @@ const (
 	MODE_INSERT             // insert record
 )
 
+const PRIMARY_INDEX_ID uint32 = 0
+
 type TableSchema struct {
-	Name                  string
-	ColumnTypes           []ValueType
-	ColumnNames           []string
-	IndexColumns          []string
-	SecondaryIndexColumns []string
-	Prefix                uint32
+	Name             string
+	ColumnTypes      []ValueType
+	ColumnNames      []string
+	PrimaryIndex     []string
+	SecondaryIndexes [][]string
+	Prefix           uint32
 }
 
 type Table struct {
@@ -27,19 +29,19 @@ type Table struct {
 }
 
 func (table *Table) Get(query *Record) (bool, error) {
-	key, err := table.getKey(query)
+	key, err := table.getPrimaryKey(query)
 
 	if err != nil {
 		return false, err
 	}
 
-	getResponse, err := table.kv.Get(&kv.GetRequest{Key: table.encodeKey(key)})
+	response, err := table.kv.Get(&kv.GetRequest{Key: key})
 
-	if getResponse.Value == nil {
+	if response.Value == nil {
 		return false, err
 	}
 
-	table.decodePayload(query, getResponse.Value)
+	table.decodePayload(query, response.Value)
 
 	return true, nil
 }
@@ -57,26 +59,25 @@ func (table *Table) Upsert(query *Record) error {
 }
 
 func (table *Table) Delete(query *Record) error {
-	key, err := table.getKey(query)
+	key, err := table.getPrimaryKey(query)
 
 	if err != nil {
 		return err
 	}
 
-	_, err = table.kv.Delete(&kv.DeleteRequest{Key: table.encodeKey(key)})
+	_, err = table.kv.Delete(&kv.DeleteRequest{Key: key})
 
 	return err
 }
 
 func (table *Table) update(query *Record, mode int8) error {
-	key, err := table.getKey(query)
+	key, err := table.getPrimaryKey(query)
 
 	if err != nil {
 		return err
 	}
 
-	encodedKey := table.encodeKey(key)
-	getResponse, err := table.kv.Get(&kv.GetRequest{Key: encodedKey})
+	getResponse, err := table.kv.Get(&kv.GetRequest{Key: key})
 
 	if err != nil {
 		return err
@@ -90,47 +91,13 @@ func (table *Table) update(query *Record, mode int8) error {
 		return fmt.Errorf("Table can`t insert record because it`s exist: %v", query)
 	}
 
-	payload, err := table.getPayload(query)
-
-	if err != nil {
-		return err
-	}
-
-	_, err = table.kv.Set(&kv.SetRequest{Key: encodedKey, Value: table.encodePayload(payload)})
+	_, err = table.kv.Set(&kv.SetRequest{Key: key, Value: table.encodePayload(query)})
 
 	return err
 }
 
-func (table *Table) getKey(query *Record) ([]Value, error) {
-	values := make([]Value, len(table.schema.IndexColumns))
-
-	for columnPos, columnName := range table.schema.IndexColumns {
-		columnValue := query.Get(columnName)
-
-		if columnValue == nil {
-			return nil, fmt.Errorf("Table cant`t create primary key because one of index columns is missed: %s", columnName)
-		}
-
-		values[columnPos] = columnValue
-	}
-
-	return values, nil
-}
-
-func (table *Table) encodeKey(values []Value) []byte {
-	encodedKey := make([]byte, 4)
-
-	binary.LittleEndian.PutUint32(encodedKey, table.schema.Prefix)
-
-	for _, value := range values {
-		encodedKey = append(encodedKey, value.serialize()...)
-	}
-
-	return encodedKey
-}
-
-func (table *Table) getPayload(query *Record) ([]Value, error) {
-	values := make([]Value, len(table.schema.ColumnNames))
+func (table *Table) encodePayload(query *Record) []byte {
+	encodedPayload := make([]byte, 0)
 
 	for columnPos, columnName := range table.schema.ColumnNames {
 		columnValue := query.Get(columnName)
@@ -139,17 +106,7 @@ func (table *Table) getPayload(query *Record) ([]Value, error) {
 			columnValue = createValue(table.schema.ColumnTypes[columnPos])
 		}
 
-		values[columnPos] = columnValue
-	}
-
-	return values, nil
-}
-
-func (table *Table) encodePayload(values []Value) []byte {
-	encodedPayload := make([]byte, 0)
-
-	for _, value := range values {
-		encodedPayload = append(encodedPayload, value.serialize()...)
+		encodedPayload = append(encodedPayload, columnValue.serialize()...)
 	}
 
 	return encodedPayload
@@ -168,4 +125,63 @@ func (table *Table) decodePayload(record *Record, encodedPayload []byte) {
 			record.Set(columnName, columnValue)
 		}
 	}
+}
+
+func (table *Table) getPrimaryKey(query *Record) ([]byte, error) {
+	if table.matchIndex(query, table.schema.PrimaryIndex) {
+		return table.encodeIndex(PRIMARY_INDEX_ID, table.getIndex(query, table.schema.PrimaryIndex)), nil
+	}
+
+	if secondaryKey := table.getSecondaryKey(query); secondaryKey != nil {
+		response, err := table.kv.Get(&kv.GetRequest{Key: secondaryKey})
+
+		return response.Value, err
+	}
+
+	return nil, nil
+}
+
+func (table *Table) getSecondaryKey(query *Record) []byte {
+	for indexNumber, secondaryColumns := range table.schema.SecondaryIndexes {
+		if table.matchIndex(query, secondaryColumns) {
+			return table.encodeIndex(PRIMARY_INDEX_ID+uint32(indexNumber), table.getIndex(query, table.schema.PrimaryIndex))
+		}
+	}
+
+	return nil
+}
+
+func (table *Table) matchIndex(query *Record, indexColumns []string) bool {
+	for _, columnName := range indexColumns {
+		columnValue := query.Get(columnName)
+
+		if columnValue == nil {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (table *Table) getIndex(query *Record, indexColumns []string) []Value {
+	values := make([]Value, len(indexColumns))
+
+	for columnPos, columnName := range table.schema.PrimaryIndex {
+		values[columnPos] = query.Get(columnName)
+	}
+
+	return values
+}
+
+func (table *Table) encodeIndex(indexId uint32, values []Value) []byte {
+	encodedKey := make([]byte, 8)
+
+	binary.LittleEndian.PutUint32(encodedKey[0:4], table.schema.Prefix)
+	binary.LittleEndian.PutUint32(encodedKey[4:8], indexId)
+
+	for _, value := range values {
+		encodedKey = append(encodedKey, value.serialize()...)
+	}
+
+	return encodedKey
 }
