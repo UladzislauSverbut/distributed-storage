@@ -4,6 +4,7 @@ import (
 	"distributed-storage/internal/kv"
 	"encoding/binary"
 	"fmt"
+	"slices"
 )
 
 const (
@@ -71,13 +72,13 @@ func (table *Table) Delete(query *Record) error {
 }
 
 func (table *Table) update(query *Record, mode int8) error {
-	key, err := table.getPrimaryKey(query)
+	primaryKey, err := table.getPrimaryKey(query)
 
 	if err != nil {
 		return err
 	}
 
-	getResponse, err := table.kv.Get(&kv.GetRequest{Key: key})
+	getResponse, err := table.kv.Get(&kv.GetRequest{Key: primaryKey})
 
 	if err != nil {
 		return err
@@ -91,9 +92,59 @@ func (table *Table) update(query *Record, mode int8) error {
 		return fmt.Errorf("Table can`t insert record because it`s exist: %v", query)
 	}
 
-	_, err = table.kv.Set(&kv.SetRequest{Key: key, Value: table.encodePayload(query)})
+	if _, err := table.kv.Set(&kv.SetRequest{Key: primaryKey, Value: table.encodePayload(query)}); err != nil {
+		return err
+	}
 
-	return err
+	if getResponse.Value == nil {
+		return table.createSecondaryIndexes(primaryKey, query)
+	} else {
+		oldQuery := &Record{}
+		table.decodePayload(oldQuery, getResponse.Value)
+
+		return table.updateSecondaryIndexes(primaryKey, query, oldQuery)
+	}
+}
+
+func (table *Table) createSecondaryIndexes(primaryKey []byte, query *Record) error {
+	for indexNumber := range table.schema.SecondaryIndexes {
+
+		if secondaryKey := table.getSecondaryKey(indexNumber, query); secondaryKey != nil {
+
+			if _, err := table.kv.Set(&kv.SetRequest{Key: secondaryKey, Value: primaryKey}); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (table *Table) updateSecondaryIndexes(primaryKey []byte, query *Record, oldQuery *Record) error {
+	oldPrimaryKey, _ := table.getPrimaryKey(oldQuery)
+	primaryKeyChanged := slices.Compare(primaryKey, oldPrimaryKey) != 0
+
+	for indexNumber := range table.schema.SecondaryIndexes {
+		secondaryKey := table.getSecondaryKey(indexNumber, query)
+		oldSecondaryKey := table.getSecondaryKey(indexNumber, oldQuery)
+
+		if slices.Compare(secondaryKey, oldSecondaryKey) != 0 {
+			if oldSecondaryKey != nil {
+				if _, err := table.kv.Delete(&kv.DeleteRequest{Key: oldSecondaryKey}); err != nil {
+					return err
+				}
+			}
+
+		}
+
+		if primaryKeyChanged && secondaryKey != nil {
+			if _, err := table.kv.Set(&kv.SetRequest{Key: secondaryKey, Value: primaryKey}); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func (table *Table) encodePayload(query *Record) []byte {
@@ -119,11 +170,7 @@ func (table *Table) decodePayload(record *Record, encodedPayload []byte) {
 		columnValue.parse(encodedPayload)
 		encodedPayload = encodedPayload[columnValue.Size():]
 
-		if record.Has(columnName) {
-			record.Set(columnName, columnValue)
-		} else {
-			record.Set(columnName, columnValue)
-		}
+		record.Set(columnName, columnValue)
 	}
 }
 
@@ -132,23 +179,24 @@ func (table *Table) getPrimaryKey(query *Record) ([]byte, error) {
 		return table.encodeIndex(PRIMARY_INDEX_ID, table.getIndex(query, table.schema.PrimaryIndex)), nil
 	}
 
-	if secondaryKey := table.getSecondaryKey(query); secondaryKey != nil {
-		response, err := table.kv.Get(&kv.GetRequest{Key: secondaryKey})
+	for indexNumber := range table.schema.SecondaryIndexes {
 
-		return response.Value, err
-	}
+		if secondaryKey := table.getSecondaryKey(indexNumber, query); secondaryKey != nil {
+			response, err := table.kv.Get(&kv.GetRequest{Key: secondaryKey})
 
-	return nil, nil
-}
-
-func (table *Table) getSecondaryKey(query *Record) []byte {
-	for indexNumber, secondaryColumns := range table.schema.SecondaryIndexes {
-		if table.matchIndex(query, secondaryColumns) {
-			return table.encodeIndex(PRIMARY_INDEX_ID+uint32(indexNumber), table.getIndex(query, table.schema.PrimaryIndex))
+			return response.Value, err
 		}
 	}
 
-	return nil
+	return nil, fmt.Errorf("Table can`t find primary key for record: %v", query)
+}
+
+func (table *Table) getSecondaryKey(indexNumber int, query *Record) []byte {
+	if !table.matchIndex(query, table.schema.SecondaryIndexes[indexNumber]) {
+		return nil
+	}
+
+	return table.encodeIndex(PRIMARY_INDEX_ID+uint32(indexNumber), table.getIndex(query, table.schema.SecondaryIndexes[indexNumber]))
 }
 
 func (table *Table) matchIndex(query *Record, indexColumns []string) bool {
@@ -166,7 +214,7 @@ func (table *Table) matchIndex(query *Record, indexColumns []string) bool {
 func (table *Table) getIndex(query *Record, indexColumns []string) []Value {
 	values := make([]Value, len(indexColumns))
 
-	for columnPos, columnName := range table.schema.PrimaryIndex {
+	for columnPos, columnName := range indexColumns {
 		values[columnPos] = query.Get(columnName)
 	}
 
