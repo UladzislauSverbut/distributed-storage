@@ -93,8 +93,6 @@ func (node *BNode) getValue(position BNodeKeyPosition) []byte {
 }
 
 func (node *BNode) appendKeyValue(key []byte, value []byte) {
-	// we find first value nil or pointer 0 that means we dont store any values for such position
-
 	position := node.getAvailableKeyPosition()
 
 	if position == node.getStoredKeysNumber() {
@@ -114,8 +112,6 @@ func (node *BNode) appendKeyValue(key []byte, value []byte) {
 }
 
 func (node *BNode) appendPointer(key []byte, pointer BNodePointer) {
-	// we find first value nil or pointer 0 that means we dont store any values for such position
-
 	position := node.getAvailableKeyPosition()
 
 	if position == node.getStoredKeysNumber() {
@@ -193,10 +189,9 @@ func (node *BNode) getKeyValueOffset(position BNodeKeyPosition) uint16 {
 
 func (node *BNode) getAvailableKeyPosition() BNodeKeyPosition {
 	for position := BNodeKeyPosition(0); position < node.getStoredKeysNumber(); position++ {
-		value := node.getValue(position)
-		pointer := node.getChildPointer(position)
+		key := node.getKey(position)
 
-		if len(value) == 0 && pointer == 0 {
+		if len(key) == 0 {
 			return position
 		}
 	}

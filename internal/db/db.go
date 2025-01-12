@@ -94,10 +94,7 @@ func (database *Database) Create(schema TableSchema) (*Table, error) {
 
 func (database *Database) getTableSchema(tableName string) *TableSchema {
 	schemaTable := database.Get(SCHEMA_TABLE_NAME)
-
-	query := NewObject().Set("name", NewStringValue(tableName))
-
-	record, err := schemaTable.Get(query)
+	record, err := schemaTable.Get(NewObject().Set("name", NewStringValue(tableName)))
 
 	if err != nil {
 		panic(fmt.Sprintf("Database can`t read schema table %v", schemaTable))
@@ -120,9 +117,7 @@ func (database *Database) saveTableSchema(schema *TableSchema) error {
 	schemaTable := database.Get(SCHEMA_TABLE_NAME)
 	stringifiedSchema, _ := json.Marshal(schema)
 
-	query := NewObject().Set("name", NewStringValue(schema.Name)).Set("definition", NewStringValue(string(stringifiedSchema)))
-
-	return schemaTable.Insert(query)
+	return schemaTable.Insert(NewObject().Set("name", NewStringValue(schema.Name)).Set("definition", NewStringValue(string(stringifiedSchema))))
 }
 
 func (database *Database) validateTableSchema(schema *TableSchema) error {

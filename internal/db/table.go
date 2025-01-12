@@ -100,6 +100,7 @@ func (table *Table) update(record *Object, mode int8) error {
 		oldRecord := table.decodePayload(response.Value)
 		return table.updateSecondaryIndexes(record, oldRecord)
 	}
+
 }
 
 func (table *Table) createSecondaryIndexes(record *Object) error {
@@ -218,7 +219,7 @@ func (table *Table) getSecondaryKey(query *Object, indexNumber int) []byte {
 	secondaryKey := make([]byte, 8)
 
 	binary.LittleEndian.PutUint32(secondaryKey[0:4], table.schema.Prefix)
-	binary.LittleEndian.PutUint32(secondaryKey[4:8], PRIMARY_INDEX_ID+uint32(indexNumber))
+	binary.LittleEndian.PutUint32(secondaryKey[4:8], PRIMARY_INDEX_ID+uint32(indexNumber+1))
 
 	for _, value := range secondaryKeyValues {
 		secondaryKey = append(secondaryKey, value.serialize()...)
