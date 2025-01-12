@@ -1,30 +1,20 @@
 package db
 
-import "slices"
-
 type Object struct {
-	fields []string
-	values []Value
+	values map[string]Value
 }
 
 func (object *Object) Set(field string, value Value) *Object {
-	fieldPosition := slices.Index(object.fields, field)
-
-	if fieldPosition >= 0 {
-		object.values[fieldPosition] = value
-	} else {
-		object.fields = append(object.fields, field)
-		object.values = append(object.values, value)
-	}
+	object.values[field] = value
 
 	return object
 }
 
 func (object *Object) Get(field string) Value {
-	fieldPosition := slices.Index(object.fields, field)
+	value, ok := object.values[field]
 
-	if fieldPosition >= 0 {
-		return object.values[fieldPosition]
+	if ok {
+		return value
 	} else {
 		return NewNullValue()
 	}
@@ -40,8 +30,10 @@ func (object *Object) GetMany(fields []string) []Value {
 	return values
 }
 
-func (record *Object) Has(field string) bool {
-	return slices.Index(record.fields, field) >= 0
+func (object *Object) Has(field string) bool {
+	_, ok := object.values[field]
+
+	return ok
 }
 
 func NewObject() *Object {
