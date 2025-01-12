@@ -15,8 +15,12 @@ func (value *NullValue) Size() int {
 	return 0
 }
 
+func (value *NullValue) Empty() bool {
+	return true
+}
+
 func (value *NullValue) serialize() []byte {
-	return []byte{}
+	return []byte{0}
 }
 
 func (value *NullValue) parse(payload []byte) {

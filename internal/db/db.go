@@ -10,7 +10,7 @@ const DEFAULT_DIRECTORY = "/var/lib/kv/data"
 const META_TABLE_NAME = "@meta"
 const SCHEMA_TABLE_NAME = "@schemas"
 
-const MIN_UNRESERVED_TABLE_ID = 3
+const MIN_UNRESERVED_TABLE_ID = uint32(3)
 
 type Database struct {
 	kv     *kv.KeyValue
@@ -95,21 +95,21 @@ func (database *Database) Create(schema TableSchema) (*Table, error) {
 func (database *Database) getTableSchema(tableName string) *TableSchema {
 	schemaTable := database.Get(SCHEMA_TABLE_NAME)
 
-	query := NewRecord().Set("name", NewStringValue(tableName))
+	query := NewObject().Set("name", NewStringValue(tableName))
 
-	exist, err := schemaTable.Get(query)
+	record, err := schemaTable.Get(query)
 
 	if err != nil {
 		panic(fmt.Sprintf("Database can`t read schema table %v", schemaTable))
 	}
 
-	if !exist {
+	if record == nil {
 		return nil
 	}
 
 	tableSchema := &TableSchema{}
 
-	if err := json.Unmarshal([]byte(query.Get("definition").(*StringValue).Get()), tableSchema); err != nil {
+	if err := json.Unmarshal([]byte(record.Get("definition").(*StringValue).Get()), tableSchema); err != nil {
 		panic(fmt.Sprintf("Database can`t parse scheme %v", err))
 	}
 
@@ -120,7 +120,7 @@ func (database *Database) saveTableSchema(schema *TableSchema) error {
 	schemaTable := database.Get(SCHEMA_TABLE_NAME)
 	stringifiedSchema, _ := json.Marshal(schema)
 
-	query := NewRecord().Set("name", NewStringValue(schema.Name)).Set("definition", NewStringValue(string(stringifiedSchema)))
+	query := NewObject().Set("name", NewStringValue(schema.Name)).Set("definition", NewStringValue(string(stringifiedSchema)))
 
 	return schemaTable.Insert(query)
 }
@@ -130,26 +130,23 @@ func (database *Database) validateTableSchema(schema *TableSchema) error {
 }
 
 func (database *Database) getNextTableId() (uint32, error) {
+
 	metaTable := database.Get(META_TABLE_NAME)
-	query := NewRecord().Set("key", NewStringValue("next_table_id"))
+	query := NewObject().Set("key", NewStringValue("next_table_id"))
 
-	exist, err := metaTable.Get(query)
-
-	if !exist {
-		query.Set("value", NewIntValue[uint32](MIN_UNRESERVED_TABLE_ID))
-	}
+	record, err := metaTable.Get(query)
 
 	if err != nil {
 		return 0, err
 	}
 
-	availableTableId := query.Get("value").(*IntValue[uint32]).Get()
+	availableTableId := MIN_UNRESERVED_TABLE_ID
 
-	if err != nil {
-		return 0, err
+	if record != nil {
+		availableTableId = record.Get("value").(*IntValue[uint32]).Get()
 	}
 
-	query.Set("value", NewIntValue[uint32](availableTableId+1))
+	query.Set("value", NewIntValue(availableTableId+1))
 
 	if err = metaTable.Upsert(query); err != nil {
 		return 0, err

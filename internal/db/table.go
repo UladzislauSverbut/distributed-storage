@@ -29,89 +29,85 @@ type Table struct {
 	kv     *kv.KeyValue
 }
 
-func (table *Table) Get(query *Record) (bool, error) {
-	key, err := table.getPrimaryKey(query)
+func (table *Table) Get(query *Object) (*Object, error) {
+	key := table.getPrimaryKey(query)
 
-	if err != nil {
-		return false, err
+	if key == nil {
+		return nil, fmt.Errorf("Table cant`t find record because one of primary index columns is missed: %s", query)
 	}
 
 	response, err := table.kv.Get(&kv.GetRequest{Key: key})
 
-	if response.Value == nil {
-		return false, err
-	}
-
-	table.decodePayload(query, response.Value)
-
-	return true, nil
-}
-
-func (table *Table) Insert(query *Record) error {
-	return table.update(query, MODE_INSERT)
-}
-
-func (table *Table) Update(query *Record) error {
-	return table.update(query, MODE_UPDATE)
-}
-
-func (table *Table) Upsert(query *Record) error {
-	return table.update(query, MODE_UPSERT)
-}
-
-func (table *Table) Delete(query *Record) error {
-	key, err := table.getPrimaryKey(query)
-
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	_, err = table.kv.Delete(&kv.DeleteRequest{Key: key})
+	return table.decodePayload(response.Value), err
+}
+
+func (table *Table) Delete(query *Object) error {
+	key := table.getPrimaryKey(query)
+
+	if key == nil {
+		return fmt.Errorf("Table cant`t delete record because one of primary index columns is missed: %s", query)
+	}
+
+	_, err := table.kv.Delete(&kv.DeleteRequest{Key: key})
 
 	return err
 }
 
-func (table *Table) update(query *Record, mode int8) error {
-	primaryKey, err := table.getPrimaryKey(query)
+func (table *Table) Insert(record *Object) error {
+	return table.update(record, MODE_INSERT)
+}
+
+func (table *Table) Update(record *Object) error {
+	return table.update(record, MODE_UPDATE)
+}
+
+func (table *Table) Upsert(record *Object) error {
+	return table.update(record, MODE_UPSERT)
+}
+
+func (table *Table) update(record *Object, mode int8) error {
+	primaryKey := table.getPrimaryKey(record)
+
+	if primaryKey == nil {
+		return fmt.Errorf("Table cant`t update record because one of primary index columns is missed: %s", record)
+	}
+
+	response, err := table.kv.Get(&kv.GetRequest{Key: primaryKey})
 
 	if err != nil {
 		return err
 	}
 
-	getResponse, err := table.kv.Get(&kv.GetRequest{Key: primaryKey})
+	if mode == MODE_UPDATE && response.Value == nil {
+		return fmt.Errorf("Table can`t update record because it`s not exist: %v", record)
+	}
 
-	if err != nil {
+	if mode == MODE_INSERT && response.Value != nil {
+		return fmt.Errorf("Table can`t insert record because it`s exist: %v", record)
+	}
+
+	if _, err := table.kv.Set(&kv.SetRequest{Key: primaryKey, Value: table.encodePayload(record)}); err != nil {
 		return err
 	}
 
-	if mode == MODE_UPDATE && getResponse.Value == nil {
-		return fmt.Errorf("Table can`t update record because it`s not exist: %v", query)
-	}
-
-	if mode == MODE_INSERT && getResponse.Value != nil {
-		return fmt.Errorf("Table can`t insert record because it`s exist: %v", query)
-	}
-
-	if _, err := table.kv.Set(&kv.SetRequest{Key: primaryKey, Value: table.encodePayload(query)}); err != nil {
-		return err
-	}
-
-	if getResponse.Value == nil {
-		return table.createSecondaryIndexes(primaryKey, query)
+	if response.Value == nil {
+		return table.createSecondaryIndexes(record)
 	} else {
-		oldQuery := &Record{}
-		table.decodePayload(oldQuery, getResponse.Value)
-
-		return table.updateSecondaryIndexes(primaryKey, query, oldQuery)
+		oldRecord := table.decodePayload(response.Value)
+		return table.updateSecondaryIndexes(record, oldRecord)
 	}
 }
 
-func (table *Table) createSecondaryIndexes(primaryKey []byte, query *Record) error {
+func (table *Table) createSecondaryIndexes(record *Object) error {
 	for indexNumber := range table.schema.SecondaryIndexes {
 
-		if secondaryKey := table.getSecondaryKey(indexNumber, query); secondaryKey != nil {
+		if secondaryKey := table.getSecondaryKey(record, indexNumber); secondaryKey != nil {
 
-			if _, err := table.kv.Set(&kv.SetRequest{Key: secondaryKey, Value: primaryKey}); err != nil {
+			if _, err := table.kv.Set(&kv.SetRequest{Key: secondaryKey}); err != nil {
 				return err
 			}
 		}
@@ -120,13 +116,15 @@ func (table *Table) createSecondaryIndexes(primaryKey []byte, query *Record) err
 	return nil
 }
 
-func (table *Table) updateSecondaryIndexes(primaryKey []byte, query *Record, oldQuery *Record) error {
-	oldPrimaryKey, _ := table.getPrimaryKey(oldQuery)
+func (table *Table) updateSecondaryIndexes(record *Object, oldRecord *Object) error {
+	primaryKey := table.getPrimaryKey(record)
+	oldPrimaryKey := table.getPrimaryKey(oldRecord)
+
 	primaryKeyChanged := slices.Compare(primaryKey, oldPrimaryKey) != 0
 
 	for indexNumber := range table.schema.SecondaryIndexes {
-		secondaryKey := table.getSecondaryKey(indexNumber, query)
-		oldSecondaryKey := table.getSecondaryKey(indexNumber, oldQuery)
+		secondaryKey := table.getSecondaryKey(record, indexNumber)
+		oldSecondaryKey := table.getSecondaryKey(oldRecord, indexNumber)
 
 		if slices.Compare(secondaryKey, oldSecondaryKey) != 0 {
 			if oldSecondaryKey != nil {
@@ -138,7 +136,7 @@ func (table *Table) updateSecondaryIndexes(primaryKey []byte, query *Record, old
 		}
 
 		if primaryKeyChanged && secondaryKey != nil {
-			if _, err := table.kv.Set(&kv.SetRequest{Key: secondaryKey, Value: primaryKey}); err != nil {
+			if _, err := table.kv.Set(&kv.SetRequest{Key: secondaryKey}); err != nil {
 				return err
 			}
 		}
@@ -147,89 +145,92 @@ func (table *Table) updateSecondaryIndexes(primaryKey []byte, query *Record, old
 	return nil
 }
 
-func (table *Table) encodePayload(query *Record) []byte {
+func (table *Table) encodePayload(record *Object) []byte {
+	if record == nil {
+		return nil
+	}
+
 	encodedPayload := make([]byte, 0)
 
-	for columnPos, columnName := range table.schema.ColumnNames {
-		columnValue := query.Get(columnName)
+	for _, columnName := range table.schema.ColumnNames {
+		columnValue := record.Get(columnName)
 
-		if columnValue == nil {
-			columnValue = createValue(table.schema.ColumnTypes[columnPos])
+		if columnValue.Empty() {
+			encodedPayload = append(encodedPayload, byte(0))
+		} else {
+			encodedPayload = append(encodedPayload, byte(1))
+			encodedPayload = append(encodedPayload, columnValue.serialize()...)
 		}
 
-		encodedPayload = append(encodedPayload, columnValue.serialize()...)
 	}
 
 	return encodedPayload
 }
 
-func (table *Table) decodePayload(record *Record, encodedPayload []byte) {
-	for columnPos, columnName := range table.schema.ColumnNames {
-		columnValue := createValue(table.schema.ColumnTypes[columnPos])
-
-		columnValue.parse(encodedPayload)
-		encodedPayload = encodedPayload[columnValue.Size():]
-
-		record.Set(columnName, columnValue)
-	}
-}
-
-func (table *Table) getPrimaryKey(query *Record) ([]byte, error) {
-	if table.matchIndex(query, table.schema.PrimaryIndex) {
-		return table.encodeIndex(PRIMARY_INDEX_ID, table.getIndex(query, table.schema.PrimaryIndex)), nil
-	}
-
-	for indexNumber := range table.schema.SecondaryIndexes {
-
-		if secondaryKey := table.getSecondaryKey(indexNumber, query); secondaryKey != nil {
-			response, err := table.kv.Get(&kv.GetRequest{Key: secondaryKey})
-
-			return response.Value, err
-		}
-	}
-
-	return nil, fmt.Errorf("Table can`t find primary key for record: %v", query)
-}
-
-func (table *Table) getSecondaryKey(indexNumber int, query *Record) []byte {
-	if !table.matchIndex(query, table.schema.SecondaryIndexes[indexNumber]) {
+func (table *Table) decodePayload(encodedPayload []byte) *Object {
+	if encodedPayload == nil {
 		return nil
 	}
 
-	return table.encodeIndex(PRIMARY_INDEX_ID+uint32(indexNumber), table.getIndex(query, table.schema.SecondaryIndexes[indexNumber]))
-}
+	record := NewObject()
 
-func (table *Table) matchIndex(query *Record, indexColumns []string) bool {
-	for _, columnName := range indexColumns {
-		columnValue := query.Get(columnName)
-
-		if columnValue == nil {
-			return false
+	for columnPos, columnName := range table.schema.ColumnNames {
+		if encodedPayload[0] == 0 {
+			record.Set(columnName, NewNullValue())
+		} else {
+			columnValue := createValue(table.schema.ColumnTypes[columnPos])
+			columnValue.parse(encodedPayload[1:])
+			encodedPayload = encodedPayload[columnValue.Size()+1:]
+			record.Set(columnName, columnValue)
 		}
 	}
 
-	return true
+	return record
 }
 
-func (table *Table) getIndex(query *Record, indexColumns []string) []Value {
-	values := make([]Value, len(indexColumns))
+func (table *Table) getPrimaryKey(query *Object) []byte {
+	values := query.GetMany(table.schema.PrimaryIndex)
 
-	for columnPos, columnName := range indexColumns {
-		values[columnPos] = query.Get(columnName)
+	if table.hasEmptyValues(values) {
+		return nil
 	}
 
-	return values
-}
+	primaryKey := make([]byte, 8)
 
-func (table *Table) encodeIndex(indexId uint32, values []Value) []byte {
-	encodedKey := make([]byte, 8)
-
-	binary.LittleEndian.PutUint32(encodedKey[0:4], table.schema.Prefix)
-	binary.LittleEndian.PutUint32(encodedKey[4:8], indexId)
+	binary.LittleEndian.PutUint32(primaryKey[0:4], table.schema.Prefix)
+	binary.LittleEndian.PutUint32(primaryKey[4:8], PRIMARY_INDEX_ID)
 
 	for _, value := range values {
-		encodedKey = append(encodedKey, value.serialize()...)
+		primaryKey = append(primaryKey, value.serialize()...)
 	}
 
-	return encodedKey
+	return primaryKey
+}
+
+func (table *Table) getSecondaryKey(query *Object, indexNumber int) []byte {
+	primaryKeyValues := query.GetMany(table.schema.PrimaryIndex)
+	secondaryKeyValues := query.GetMany(table.schema.SecondaryIndexes[indexNumber])
+
+	if table.hasEmptyValues(primaryKeyValues) || table.hasEmptyValues(secondaryKeyValues) {
+		return nil
+	}
+
+	secondaryKey := make([]byte, 8)
+
+	binary.LittleEndian.PutUint32(secondaryKey[0:4], table.schema.Prefix)
+	binary.LittleEndian.PutUint32(secondaryKey[4:8], PRIMARY_INDEX_ID+uint32(indexNumber))
+
+	for _, value := range secondaryKeyValues {
+		secondaryKey = append(secondaryKey, value.serialize()...)
+	}
+
+	for _, value := range primaryKeyValues {
+		secondaryKey = append(secondaryKey, value.serialize()...)
+	}
+
+	return secondaryKey
+}
+
+func (table *Table) hasEmptyValues(values []Value) bool {
+	return slices.IndexFunc(values, func(value Value) bool { return value.Empty() }) >= 0
 }

@@ -24,6 +24,10 @@ func (value *IntValue[T]) Size() int {
 	return 8
 }
 
+func (value *IntValue[T]) Empty() bool {
+	return false
+}
+
 func (value *IntValue[T]) serialize() []byte {
 	unsignedInt := uint64(value.num) + (1 << 63)
 	serializedInt := make([]byte, 8)

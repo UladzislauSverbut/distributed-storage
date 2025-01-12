@@ -18,6 +18,10 @@ func (value *StringValue) Size() int {
 	return len(value.str) + 1
 }
 
+func (value *StringValue) Empty() bool {
+	return false
+}
+
 func (value *StringValue) serialize() []byte {
 	escapeSymbolsCount := bytes.Count(value.str, []byte{0}) + bytes.Count(value.str, []byte{1})
 	serializedString := make([]byte, len(value.str)+escapeSymbolsCount+1)
