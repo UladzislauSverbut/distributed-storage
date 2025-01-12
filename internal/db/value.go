@@ -12,7 +12,8 @@ type Value interface {
 }
 
 const (
-	VALUE_TYPE_STRING ValueType = iota
+	VALUE_TYPE_NULL ValueType = iota
+	VALUE_TYPE_STRING
 	VALUE_TYPE_INT32
 	VALUE_TYPE_INT64
 	VALUE_TYPE_UINT32
