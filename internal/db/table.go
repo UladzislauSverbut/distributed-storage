@@ -181,7 +181,9 @@ func (table *Table) decodePayload(encodedPayload []byte) *Object {
 		} else {
 			columnValue := createValue(table.schema.ColumnTypes[columnPos])
 			columnValue.parse(encodedPayload[1:])
+
 			encodedPayload = encodedPayload[columnValue.Size()+1:]
+
 			record.Set(columnName, columnValue)
 		}
 	}
