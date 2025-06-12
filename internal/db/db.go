@@ -63,8 +63,8 @@ func (database *Database) Get(tableName string) *Table {
 	return table
 }
 
-func (database *Database) Create(schema TableSchema) (*Table, error) {
-	if err := database.validateTableSchema(&schema); err != nil {
+func (database *Database) Create(schema *TableSchema) (*Table, error) {
+	if err := database.validateTableSchema(schema); err != nil {
 		return nil, err
 	}
 
@@ -82,10 +82,10 @@ func (database *Database) Create(schema TableSchema) (*Table, error) {
 
 	schema.Prefix = tableId
 
-	database.saveTableSchema(&schema)
+	database.saveTableSchema(schema)
 
 	table = &Table{
-		schema: &schema,
+		schema: schema,
 		kv:     database.kv,
 	}
 

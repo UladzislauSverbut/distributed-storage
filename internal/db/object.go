@@ -37,5 +37,5 @@ func (object *Object) Has(field string) bool {
 }
 
 func NewObject() *Object {
-	return &Object{}
+	return &Object{values: make(map[string]Value)}
 }
