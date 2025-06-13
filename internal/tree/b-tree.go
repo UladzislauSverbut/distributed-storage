@@ -84,8 +84,8 @@ func (tree *BTree) Set(key []byte, value []byte) ([]byte, error) {
 }
 
 func (tree *BTree) Delete(key []byte) ([]byte, error) {
-	if len(key) > tree.config.PageSize {
-		return nil, fmt.Errorf("BTree supports only keys within the size %d", tree.config.PageSize)
+	if len(key) > tree.config.MaxKeySize {
+		return nil, fmt.Errorf("BTree supports only keys within the size %d", tree.config.MaxKeySize)
 	}
 
 	if tree.root == NULL_NODE {
@@ -271,6 +271,8 @@ func (tree *BTree) replaceParentChildren(parent *BNode, children []*BNode, posit
 }
 
 func (tree *BTree) mergeParentChildren(node *BNode, newChild *BNode, position BNodeKeyPosition) *BNode {
+	defer tree.storage.Delete(node.getChildPointer(position))
+
 	if int(newChild.size()) < tree.config.PageSize/4 {
 		if position > 0 {
 			leftChildPointer := node.getChildPointer(position - 1)
@@ -298,7 +300,6 @@ func (tree *BTree) mergeParentChildren(node *BNode, newChild *BNode, position BN
 			}
 		}
 	}
-
 	return tree.replaceParentChildren(node, []*BNode{newChild}, position, 1)
 }
 

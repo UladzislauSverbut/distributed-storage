@@ -11,9 +11,9 @@ type KeyValue struct {
 
 func NewKeyValue(filePath string) (*KeyValue, error) {
 	config := tree.BTreeConfig{
-		PageSize:     4096,
-		MaxValueSize: 3000,
-		MaxKeySize:   1000,
+		PageSize:     16 * 1024, // 16KB
+		MaxValueSize: 3 * 1024,  // 3KB
+		MaxKeySize:   1 * 1024,  // 1KB
 	}
 
 	storage, err := tree.NewBTreeFileStorage(filePath, config.PageSize)

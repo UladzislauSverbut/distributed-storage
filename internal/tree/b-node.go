@@ -100,7 +100,8 @@ func (node *BNode) appendKeyValue(key []byte, value []byte) {
 	}
 
 	node.setChildPointer(position, 0)
-	keyValueAddress := node.convertKeyValueOffsetToAddress(node.getKeyValueOffset(position))
+	keyValueOffset := node.getKeyValueOffset(position)
+	keyValueAddress := node.convertKeyValueOffsetToAddress(keyValueOffset)
 
 	binary.LittleEndian.PutUint16(node.data[keyValueAddress:], uint16(len(key)))
 	binary.LittleEndian.PutUint16(node.data[keyValueAddress+2:], uint16(len(value)))
@@ -108,7 +109,7 @@ func (node *BNode) appendKeyValue(key []byte, value []byte) {
 	copy(node.data[keyValueAddress+4:], key)
 	copy(node.data[keyValueAddress+4+uint16(len(key)):], value)
 
-	node.setKeyValueOffset(position+1, keyValueAddress+4+uint16(len(key)+len(value)))
+	node.setKeyValueOffset(position+1, keyValueOffset+4+uint16(len(key)+len(value)))
 }
 
 func (node *BNode) appendPointer(key []byte, pointer BNodePointer) {
