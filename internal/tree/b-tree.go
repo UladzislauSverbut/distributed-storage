@@ -249,6 +249,10 @@ func (tree *BTree) deleteParentKeyValue(node *BNode, key []byte) (*BNode, []byte
 		return node, oldValue
 	}
 
+	if updatedChild.getStoredKeysNumber() == 0 {
+		return tree.deleteParentChild(node, keyPosition), oldValue
+	}
+
 	return tree.mergeParentChildren(node, updatedChild, keyPosition), oldValue
 }
 
@@ -301,6 +305,18 @@ func (tree *BTree) mergeParentChildren(node *BNode, newChild *BNode, position BN
 	return tree.replaceParentChildren(node, []*BNode{newChild}, position, 1)
 }
 
+func (tree *BTree) deleteParentChild(parent *BNode, position BNodeKeyPosition) *BNode {
+	newNode := &BNode{data: make([]byte, tree.config.PageSize)}
+
+	tree.storage.Delete(parent.getChildPointer(position))
+
+	newNode.setHeader(BNODE_PARENT, parent.getStoredKeysNumber()-1)
+	newNode.copy(parent, 0, 0, position)
+	newNode.copy(parent, position+1, position, parent.getStoredKeysNumber()-(position+1))
+
+	return newNode
+}
+
 func (tree *BTree) splitNode(node *BNode) []*BNode {
 	keysNumber := node.getStoredKeysNumber()
 	storedKeysForFirstNode := keysNumber - 1
@@ -333,7 +349,6 @@ func (tree *BTree) splitNode(node *BNode) []*BNode {
 }
 
 func (tree *BTree) mergeNodes(first *BNode, second *BNode) *BNode {
-	fmt.Print("merging nodes: ", first.getType(), " + ", second.getType(), "\n")
 	mergedNode := &BNode{data: make([]byte, tree.config.PageSize)}
 
 	mergedNode.setHeader(first.getType(), first.getStoredKeysNumber()+second.getStoredKeysNumber())
