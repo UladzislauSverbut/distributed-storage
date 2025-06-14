@@ -249,8 +249,6 @@ func (tree *BTree) deleteParentKeyValue(node *BNode, key []byte) (*BNode, []byte
 		return node, oldValue
 	}
 
-	tree.storage.Delete(childPointer)
-
 	return tree.mergeParentChildren(node, updatedChild, keyPosition), oldValue
 }
 
@@ -335,6 +333,7 @@ func (tree *BTree) splitNode(node *BNode) []*BNode {
 }
 
 func (tree *BTree) mergeNodes(first *BNode, second *BNode) *BNode {
+	fmt.Print("merging nodes: ", first.getType(), " + ", second.getType(), "\n")
 	mergedNode := &BNode{data: make([]byte, tree.config.PageSize)}
 
 	mergedNode.setHeader(first.getType(), first.getStoredKeysNumber()+second.getStoredKeysNumber())
@@ -342,6 +341,7 @@ func (tree *BTree) mergeNodes(first *BNode, second *BNode) *BNode {
 	mergedNode.copy(first, 0, 0, first.getStoredKeysNumber())
 	mergedNode.copy(second, 0, first.getStoredKeysNumber(), second.getStoredKeysNumber())
 
+	fmt.Print("merged node size: ", mergedNode.size(), " stored keys: ", mergedNode.getStoredKeysNumber(), "and type: ", mergedNode.getType(), "\n")
 	return mergedNode
 }
 
