@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-const DEFAULT_DIRECTORY = "/var/lib/kv/data"
+const DEFAULT_DIRECTORY = "/var/lib/kv"
 const META_TABLE_NAME = "@meta"
 const SCHEMA_TABLE_NAME = "@schemas"
 
