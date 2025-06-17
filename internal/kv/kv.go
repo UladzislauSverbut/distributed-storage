@@ -4,28 +4,24 @@ import (
 	"distributed-storage/internal/tree"
 )
 
-type KeyValue struct {
-	tree    *tree.BTree
-	storage *tree.BTreeFileStorage
+var config = tree.BTreeConfig{
+	PageSize:     16 * 1024, // 16KB
+	MaxValueSize: 3 * 1024,  // 3KB
+	MaxKeySize:   1 * 1024,  // 1KB
 }
 
-func NewKeyValue(filePath string) (*KeyValue, error) {
-	config := tree.BTreeConfig{
-		PageSize:     16 * 1024, // 16KB
-		MaxValueSize: 3 * 1024,  // 3KB
-		MaxKeySize:   1 * 1024,  // 1KB
-	}
+type KeyValue struct {
+	tree    *tree.BTree
+	storage tree.BTreeStorage
+}
 
-	storage, err := tree.NewBTreeFileStorage(filePath, config.PageSize)
-
-	if err != nil {
-		return nil, err
-	}
+func NewKeyValue(filePath string) *KeyValue {
+	storage := tree.NewBTreeFileStorage(filePath, config.PageSize)
 
 	return &KeyValue{
-		tree:    tree.NewBTree(storage.Root(), storage, config),
+		tree:    tree.NewBTree(storage.GetRoot(), storage, config),
 		storage: storage,
-	}, nil
+	}
 }
 
 func (kv *KeyValue) Get(request *GetRequest) (*GetResponse, error) {
@@ -41,7 +37,7 @@ func (kv *KeyValue) Set(request *SetRequest) (*SetResponse, error) {
 		return &SetResponse{}, err
 	}
 
-	if err = kv.storage.Save(kv.tree); err != nil {
+	if err = kv.storage.SaveRoot(kv.tree.Root()); err != nil {
 		return &SetResponse{}, err
 	}
 
@@ -59,7 +55,7 @@ func (kv *KeyValue) Delete(request *DeleteRequest) (*DeleteResponse, error) {
 		return &DeleteResponse{}, nil
 	}
 
-	if err = kv.storage.Save(kv.tree); err != nil {
+	if err = kv.storage.SaveRoot(kv.tree.Root()); err != nil {
 		return &DeleteResponse{}, nil
 	}
 

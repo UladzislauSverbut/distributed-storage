@@ -6,11 +6,7 @@ import (
 	"log"
 )
 
-type StorageAdapter interface {
-	Get(BNodePointer) *BNode    // dereference a pointer
-	Create(*BNode) BNodePointer // allocate a new page
-	Delete(BNodePointer)        // deallocate a page
-}
+type BTreeRootPointer = uint64
 
 type BTreeConfig struct {
 	PageSize     int
@@ -18,12 +14,12 @@ type BTreeConfig struct {
 	MaxValueSize int
 }
 type BTree struct {
-	storage StorageAdapter
+	storage BTreeStorage
 	root    BNodePointer
 	config  BTreeConfig
 }
 
-func NewBTree(root BNodePointer, storage StorageAdapter, config BTreeConfig) *BTree {
+func NewBTree(root BTreeRootPointer, storage BTreeStorage, config BTreeConfig) *BTree {
 	return &BTree{
 		root:    root,
 		storage: storage,
@@ -109,6 +105,10 @@ func (tree *BTree) Delete(key []byte) ([]byte, error) {
 	}
 
 	return oldValue, nil
+}
+
+func (tree *BTree) Root() BTreeRootPointer {
+	return tree.root
 }
 
 func (tree *BTree) getKeyValue(node *BNode, key []byte) []byte {

@@ -21,12 +21,11 @@ type TableSchema struct {
 	ColumnNames      []string
 	PrimaryIndex     []string
 	SecondaryIndexes [][]string
-	Prefix           uint32
 }
 
 type Table struct {
 	schema *TableSchema
-	kv     *kv.KeyValue
+	kv     *kv.KeyValueNamespace
 }
 
 func (table *Table) Get(query *Object) (*Object, error) {
@@ -198,10 +197,9 @@ func (table *Table) getPrimaryKey(query *Object) []byte {
 		return nil
 	}
 
-	primaryKey := make([]byte, 8)
+	primaryKey := make([]byte, 4)
 
-	binary.LittleEndian.PutUint32(primaryKey[0:4], table.schema.Prefix)
-	binary.LittleEndian.PutUint32(primaryKey[4:8], PRIMARY_INDEX_ID)
+	binary.LittleEndian.PutUint32(primaryKey[0:4], PRIMARY_INDEX_ID)
 
 	for _, value := range values {
 		primaryKey = append(primaryKey, value.serialize()...)
@@ -218,10 +216,9 @@ func (table *Table) getSecondaryKey(query *Object, indexNumber int) []byte {
 		return nil
 	}
 
-	secondaryKey := make([]byte, 8)
+	secondaryKey := make([]byte, 4)
 
-	binary.LittleEndian.PutUint32(secondaryKey[0:4], table.schema.Prefix)
-	binary.LittleEndian.PutUint32(secondaryKey[4:8], PRIMARY_INDEX_ID+uint32(indexNumber+1))
+	binary.LittleEndian.PutUint32(secondaryKey[0:4], PRIMARY_INDEX_ID+uint32(indexNumber+1))
 
 	for _, value := range secondaryKeyValues {
 		secondaryKey = append(secondaryKey, value.serialize()...)

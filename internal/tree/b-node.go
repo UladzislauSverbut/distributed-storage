@@ -96,7 +96,7 @@ func (node *BNode) appendKeyValue(key []byte, value []byte) {
 	position := node.getAvailableKeyPosition()
 
 	if position == node.getStoredKeysNumber() {
-		panic("couldn't append key-value because node is full")
+		panic("BNode couldn't append key-value because node is full")
 	}
 
 	node.setChildPointer(position, 0)
@@ -116,7 +116,7 @@ func (node *BNode) appendPointer(key []byte, pointer BNodePointer) {
 	position := node.getAvailableKeyPosition()
 
 	if position == node.getStoredKeysNumber() {
-		panic("couldn't append key-value because node is full")
+		panic("BNode couldn't append key-value because node is full")
 	}
 
 	node.appendKeyValue(key, nil)
@@ -134,11 +134,11 @@ func (node *BNode) size() uint16 {
 func (node *BNode) copy(source *BNode, from BNodeKeyPosition, to BNodeKeyPosition, quantity uint16) {
 
 	if from+quantity > source.getStoredKeysNumber() {
-		panic(fmt.Sprintf("couldn't copy %d values from position %d because source node has only %d keys", quantity, from, source.getStoredKeysNumber()))
+		panic(fmt.Sprintf("BNode couldn't copy %d values from position %d because source node has only %d keys", quantity, from, source.getStoredKeysNumber()))
 	}
 
 	if to+quantity > node.getStoredKeysNumber() {
-		panic(fmt.Sprintf("couldn't copy %d values from position %d because target node has only %d keys", quantity, from, node.getStoredKeysNumber()))
+		panic(fmt.Sprintf("BNode couldn't copy %d values from position %d because target node has only %d keys", quantity, from, node.getStoredKeysNumber()))
 	}
 
 	sourceBeginOffset := source.getKeyValueOffset(from)

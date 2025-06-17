@@ -81,6 +81,6 @@ func (scanner *BTreeScanner) compareKeys(key []byte, foundKey []byte, compareStr
 	case LESS_OR_EQUAL_COMPARISON:
 		return compareResult <= 0
 	default:
-		panic(fmt.Sprintf("Explorer doesn`t support comparison strategy %d", compareStrategy))
+		panic(fmt.Sprintf("BTreeScanner doesn`t support comparison strategy %d", compareStrategy))
 	}
 }

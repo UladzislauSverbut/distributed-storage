@@ -3,15 +3,24 @@ package tree
 import (
 	"distributed-storage/internal/storage"
 	"encoding/binary"
-	"errors"
+	"fmt"
 	"os"
 )
+
+type BTreeStorage interface {
+	GetRoot() BTreeRootPointer       // get root node pointer
+	SaveRoot(BTreeRootPointer) error // save root node pointer
+
+	Get(BNodePointer) *BNode    // dereference a pointer
+	Create(*BNode) BNodePointer // allocate a new node
+	Delete(BNodePointer)        // deallocate a node
+}
 
 type BTreeFileStorage struct {
 	fs *storage.FileStorage
 }
 
-func NewBTreeFileStorage(filePath string, pageSize int) (*BTreeFileStorage, error) {
+func NewBTreeFileStorage(filePath string, pageSize int) *BTreeFileStorage {
 	var file *os.File
 	var fs *storage.FileStorage
 	var err error
@@ -23,11 +32,11 @@ func NewBTreeFileStorage(filePath string, pageSize int) (*BTreeFileStorage, erro
 	}()
 
 	if file, err = os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0644); err != nil {
-		return nil, err
+		panic(fmt.Errorf("BTreeFileStorage can`t open data file: %w", err))
 	}
 
 	if fs, err = storage.NewFileStorage(file, pageSize); err != nil {
-		return nil, err
+		panic(fmt.Errorf("BTreeFileStorage can`t read data file: %w", err))
 	}
 
 	if fs.GetNumberOfPages() > 1 {
@@ -35,19 +44,31 @@ func NewBTreeFileStorage(filePath string, pageSize int) (*BTreeFileStorage, erro
 		rootPointer := binary.LittleEndian.Uint64(fs.GetMetaInfo())
 
 		if rootPointer > uint64(fs.GetNumberOfPages()) {
-			return nil, errors.New("FileSystem storage file contains invalid pointer to root node")
+			panic(fmt.Errorf("BTreeFileStorage can`t read data file because content is corrupted: %w", err))
 		}
 	}
 
-	return &BTreeFileStorage{fs: fs}, nil
+	return &BTreeFileStorage{fs: fs}
 }
 
-func (treeStorage *BTreeFileStorage) Root() BNodePointer {
+func (treeStorage *BTreeFileStorage) GetRoot() BTreeRootPointer {
 	if treeStorage.fs.GetNumberOfPages() > 1 {
 		return binary.LittleEndian.Uint64(treeStorage.fs.GetMetaInfo())
 	}
 
 	return NULL_NODE
+}
+
+func (treeStorage *BTreeFileStorage) SaveRoot(pointer BTreeRootPointer) error {
+	if err := treeStorage.fs.SavePages(); err != nil {
+		return err
+	}
+
+	// update root pointer;
+	buffer := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buffer, pointer)
+
+	return treeStorage.fs.SaveMetaInfo(buffer)
 }
 
 func (treeStorage *BTreeFileStorage) Get(pointer BNodePointer) *BNode {
@@ -65,16 +86,4 @@ func (treeStorage *BTreeFileStorage) Create(node *BNode) BNodePointer {
 
 func (treeStorage *BTreeFileStorage) Delete(pointer BNodePointer) {
 	treeStorage.fs.DeletePage(pointer)
-}
-
-func (treeStorage *BTreeFileStorage) Save(tree *BTree) error {
-	if err := treeStorage.fs.SavePages(); err != nil {
-		return err
-	}
-
-	// update root pointer;
-	buffer := make([]byte, 8)
-	binary.LittleEndian.PutUint64(buffer, tree.root)
-
-	return treeStorage.fs.SaveMetaInfo(buffer)
 }
