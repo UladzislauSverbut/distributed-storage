@@ -10,8 +10,6 @@ const DEFAULT_DIRECTORY = "/var/lib/kv"
 const META_TABLE_NAME = "@meta"
 const SCHEMA_TABLE_NAME = "@schemas"
 
-const MIN_UNRESERVED_TABLE_ID = uint32(3)
-
 type Database struct {
 	kv     *kv.KeyValue
 	tables map[string]*Table
@@ -84,7 +82,7 @@ func (database *Database) getTableSchema(tableName string) *TableSchema {
 	record, err := schemaTable.Get(query)
 
 	if err != nil {
-		panic(fmt.Errorf("Database can`t read schema table %w", schemaTable))
+		panic(fmt.Errorf("Database can`t read schema table %w", err))
 	}
 
 	if record == nil {
