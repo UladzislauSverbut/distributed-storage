@@ -81,6 +81,12 @@ func (kv *KeyValueNamespace) Delete(request *DeleteRequest) (*DeleteResponse, er
 	return &DeleteResponse{OldValue: oldValue}, nil
 }
 
+func (kv *KeyValueNamespace) Scan(request *ScanRequest) ScanResponse {
+	treeScanner := tree.NewBTreeScanner(kv.subTree)
+
+	return treeScanner.Seek(request.Key, tree.GREATER_OR_EQUAL_COMPARISON)
+}
+
 func (kv *KeyValueNamespace) saveSubTree(root tree.BNodePointer) error {
 	subTreeBufferedPointer := make([]byte, 8)
 

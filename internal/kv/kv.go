@@ -61,3 +61,9 @@ func (kv *KeyValue) Delete(request *DeleteRequest) (*DeleteResponse, error) {
 
 	return &DeleteResponse{OldValue: oldValue}, nil
 }
+
+func (kv *KeyValue) Scan(request *ScanRequest) ScanResponse {
+	treeScanner := tree.NewBTreeScanner(kv.tree)
+
+	return treeScanner.Seek(request.Key, tree.GREATER_OR_EQUAL_COMPARISON)
+}

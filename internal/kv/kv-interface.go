@@ -26,3 +26,15 @@ type DeleteRequest struct {
 type DeleteResponse struct {
 	OldValue []byte
 }
+
+type ScanRequest struct {
+	Key []byte
+}
+
+type ScanResponse interface {
+	Current() ([]byte, []byte)
+	Next() ([]byte, []byte)
+	Prev() ([]byte, []byte)
+	HasNext() bool
+	HasPrev() bool
+}
