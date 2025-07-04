@@ -1,8 +1,6 @@
 package kv
 
-import (
-	"distributed-storage/internal/tree"
-)
+import "distributed-storage/internal/tree"
 
 var config = tree.BTreeConfig{
 	PageSize:     16 * 1024, // 16KB
@@ -11,7 +9,7 @@ var config = tree.BTreeConfig{
 }
 
 type KeyValue struct {
-	tree    *tree.BTree
+	BaseKeyValue
 	storage tree.BTreeStorage
 }
 
@@ -19,51 +17,39 @@ func NewKeyValue(filePath string) *KeyValue {
 	storage := tree.NewBTreeFileStorage(filePath, config.PageSize)
 
 	return &KeyValue{
-		tree:    tree.NewBTree(storage.GetRoot(), storage, config),
-		storage: storage,
+		BaseKeyValue: BaseKeyValue{tree: tree.NewBTree(storage.GetRoot(), storage, config)},
+		storage:      storage,
 	}
 }
 
-func (kv *KeyValue) Get(request *GetRequest) (*GetResponse, error) {
-	value, err := kv.tree.Get(request.Key)
-
-	return &GetResponse{value}, err
-}
-
-func (kv *KeyValue) Set(request *SetRequest) (*SetResponse, error) {
-	oldValue, err := kv.tree.Set(request.Key, request.Value)
+func (kv *KeyValue) Set(request *SetRequest) (response *SetResponse, err error) {
+	response, err = kv.BaseKeyValue.Set(request)
 
 	if err != nil {
+		return
+	}
+
+	if err = kv.Save(); err != nil {
 		return &SetResponse{}, err
 	}
 
-	if err = kv.storage.SaveRoot(kv.tree.Root()); err != nil {
-		return &SetResponse{}, err
-	}
-
-	if oldValue != nil {
-		return &SetResponse{Updated: true, OldValue: oldValue}, nil
-	}
-
-	return &SetResponse{Added: true}, nil
+	return
 }
 
-func (kv *KeyValue) Delete(request *DeleteRequest) (*DeleteResponse, error) {
-	oldValue, err := kv.tree.Delete(request.Key)
+func (kv *KeyValue) Delete(request *DeleteRequest) (response *DeleteResponse, err error) {
+	response, err = kv.BaseKeyValue.Delete(request)
 
 	if err != nil {
-		return &DeleteResponse{}, nil
+		return
 	}
 
-	if err = kv.storage.SaveRoot(kv.tree.Root()); err != nil {
-		return &DeleteResponse{}, nil
+	if err = kv.Save(); err != nil {
+		return &DeleteResponse{}, err
 	}
 
-	return &DeleteResponse{OldValue: oldValue}, nil
+	return
 }
 
-func (kv *KeyValue) Scan(request *ScanRequest) ScanResponse {
-	treeScanner := tree.NewBTreeScanner(kv.tree)
-
-	return treeScanner.Seek(request.Key, tree.GREATER_OR_EQUAL_COMPARISON)
+func (kv *KeyValue) Save() error {
+	return kv.storage.SaveRoot(kv.tree.Root())
 }
