@@ -16,9 +16,13 @@ type BTreeScanner struct {
 	tree *BTree
 }
 
-func (scanner *BTreeScanner) Seek(key []byte, compareStrategy int) (iterator *BTreeIterator) {
-	iterator = scanner.seekLessOrEqual(key)
-	foundKey, _ := iterator.Get()
+func NewBTreeScanner(tree *BTree) *BTreeScanner {
+	return &BTreeScanner{tree: tree}
+}
+
+func (scanner *BTreeScanner) Seek(key []byte, compareStrategy int) (cursor *BTreeCursor) {
+	cursor = scanner.seekLessOrEqual(key)
+	foundKey, _ := cursor.Current()
 
 	if scanner.compareKeys(key, foundKey, compareStrategy) {
 		return
@@ -27,20 +31,20 @@ func (scanner *BTreeScanner) Seek(key []byte, compareStrategy int) (iterator *BT
 	switch {
 	case compareStrategy > 0:
 		{
-			if iterator.HasNext() {
-				iterator.Next()
+			if cursor.HasNext() {
+				cursor.Next()
 			} else {
-				iterator = nil
+				cursor = nil
 			}
 		}
 
 	case compareStrategy < 0:
 		{
 
-			if iterator.HasPrev() {
-				iterator.Prev()
+			if cursor.HasPrev() {
+				cursor.Prev()
 			} else {
-				iterator = nil
+				cursor = nil
 			}
 		}
 	}
@@ -48,15 +52,15 @@ func (scanner *BTreeScanner) Seek(key []byte, compareStrategy int) (iterator *BT
 	return
 }
 
-func (scanner *BTreeScanner) seekLessOrEqual(key []byte) *BTreeIterator {
+func (scanner *BTreeScanner) seekLessOrEqual(key []byte) *BTreeCursor {
 	tree := scanner.tree
-	iterator := &BTreeIterator{tree: tree}
+	cursor := &BTreeCursor{tree: tree}
 
 	for parentPointer := tree.root; parentPointer != NULL_NODE; {
 		parent := tree.storage.Get(parentPointer)
 		lessOrEqualNodePointer := tree.getLessOrEqualKeyPosition(parent, key)
 
-		iterator.path = append(iterator.path, &NodePosition{parent, lessOrEqualNodePointer})
+		cursor.path = append(cursor.path, &NodePosition{parent, lessOrEqualNodePointer})
 
 		if parent.getType() == BNODE_PARENT {
 			parentPointer = parent.getChildPointer(lessOrEqualNodePointer)
@@ -65,7 +69,7 @@ func (scanner *BTreeScanner) seekLessOrEqual(key []byte) *BTreeIterator {
 		}
 	}
 
-	return iterator
+	return cursor
 }
 
 func (scanner *BTreeScanner) compareKeys(key []byte, foundKey []byte, compareStrategy int) bool {
