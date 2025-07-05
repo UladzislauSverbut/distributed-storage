@@ -1,55 +1,44 @@
 package kv
 
-import "distributed-storage/internal/tree"
-
-var config = tree.BTreeConfig{
-	PageSize:     16 * 1024, // 16KB
-	MaxValueSize: 3 * 1024,  // 3KB
-	MaxKeySize:   1 * 1024,  // 1KB
-}
+import (
+	"distributed-storage/internal/tree"
+)
 
 type KeyValue struct {
-	BaseKeyValue
-	storage tree.BTreeStorage
+	tree *tree.BTree
 }
 
-func NewKeyValue(filePath string) *KeyValue {
-	storage := tree.NewBTreeFileStorage(filePath, config.PageSize)
+func (kv *KeyValue) Get(request *GetRequest) (*GetResponse, error) {
+	value, err := kv.tree.Get(request.Key)
 
-	return &KeyValue{
-		BaseKeyValue: BaseKeyValue{tree: tree.NewBTree(storage.GetRoot(), storage, config)},
-		storage:      storage,
-	}
+	return &GetResponse{value}, err
 }
 
-func (kv *KeyValue) Set(request *SetRequest) (response *SetResponse, err error) {
-	response, err = kv.BaseKeyValue.Set(request)
+func (kv *KeyValue) Scan(request *ScanRequest) ScanResponse {
+	treeScanner := tree.NewBTreeScanner(kv.tree)
+
+	return treeScanner.Seek(request.Key, tree.GREATER_OR_EQUAL_COMPARISON)
+}
+
+func (kv *KeyValue) Set(request *SetRequest) (*SetResponse, error) {
+	oldValue, err := kv.tree.Set(request.Key, request.Value)
 
 	if err != nil {
-		return
-	}
-
-	if err = kv.Save(); err != nil {
 		return &SetResponse{}, err
 	}
+	if oldValue != nil {
+		return &SetResponse{Updated: true, OldValue: oldValue}, nil
+	}
 
-	return
+	return &SetResponse{Added: true}, nil
 }
 
-func (kv *KeyValue) Delete(request *DeleteRequest) (response *DeleteResponse, err error) {
-	response, err = kv.BaseKeyValue.Delete(request)
+func (kv *KeyValue) Delete(request *DeleteRequest) (*DeleteResponse, error) {
+	oldValue, err := kv.tree.Delete(request.Key)
 
 	if err != nil {
-		return
+		return &DeleteResponse{}, nil
 	}
 
-	if err = kv.Save(); err != nil {
-		return &DeleteResponse{}, err
-	}
-
-	return
-}
-
-func (kv *KeyValue) Save() error {
-	return kv.storage.SaveRoot(kv.tree.Root())
+	return &DeleteResponse{OldValue: oldValue}, nil
 }
