@@ -73,6 +73,12 @@ func (database *Database) Create(schema *TableSchema) (*Table, error) {
 	return table, nil
 }
 
+func (database *Database) List() []*Object {
+	schemaTable := database.Get(SCHEMA_TABLE_NAME)
+
+	return schemaTable.GetAll()
+}
+
 func (database *Database) getTableSchema(tableName string) *TableSchema {
 	schemaTable := database.Get(SCHEMA_TABLE_NAME)
 

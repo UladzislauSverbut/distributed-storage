@@ -44,6 +44,18 @@ func (table *Table) Get(query *Object) (*Object, error) {
 	return table.decodePayload(response.Value), err
 }
 
+func (table *Table) GetAll() []*Object {
+	scanResponse := table.kv.Scan(&kv.ScanRequest{})
+
+	records := make([]*Object, 0)
+
+	for value, _ := scanResponse.Current(); value != nil; value, _ = scanResponse.Next() {
+		records = append(records, table.decodePayload(value))
+	}
+
+	return records
+}
+
 func (table *Table) Delete(query *Object) error {
 	key := table.getPrimaryKey(query)
 

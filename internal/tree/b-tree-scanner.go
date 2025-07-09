@@ -73,7 +73,7 @@ func (scanner *BTreeScanner) seekLessOrEqual(key []byte) *BTreeCursor {
 }
 
 func (scanner *BTreeScanner) compareKeys(key []byte, foundKey []byte, compareStrategy int) bool {
-	compareResult := bytes.Compare(key, foundKey)
+	compareResult := bytes.Compare(foundKey, key)
 
 	switch compareStrategy {
 	case GREATER_OR_EQUAL_COMPARISON:
