@@ -25,7 +25,7 @@ type TableSchema struct {
 
 type Table struct {
 	schema *TableSchema
-	kv     *kv.ChildNamespace
+	kv     *kv.Namespace
 }
 
 func (table *Table) Get(query *Object) (*Object, error) {
@@ -49,7 +49,7 @@ func (table *Table) GetAll() []*Object {
 
 	records := make([]*Object, 0)
 
-	for value, _ := scanResponse.Current(); value != nil; value, _ = scanResponse.Next() {
+	for _, value := scanResponse.Current(); value != nil; _, value = scanResponse.Next() {
 		records = append(records, table.decodePayload(value))
 	}
 

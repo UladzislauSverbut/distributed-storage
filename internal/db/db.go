@@ -11,7 +11,7 @@ const META_TABLE_NAME = "@meta"
 const SCHEMA_TABLE_NAME = "@schemas"
 
 type Database struct {
-	kv     *kv.RootNamespace
+	kv     *kv.Namespace
 	tables map[string]*Table
 }
 
