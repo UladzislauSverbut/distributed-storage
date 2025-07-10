@@ -123,9 +123,9 @@ func (database *Database) initSystemTables() {
 	database.tables[META_TABLE_NAME] = &Table{
 		schema: &TableSchema{
 			Name:         META_TABLE_NAME,
-			ColumnTypes:  []ValueType{VALUE_TYPE_STRING, VALUE_TYPE_UINT32},
 			ColumnNames:  []string{"key", "value"},
 			PrimaryIndex: []string{"key"},
+			ColumnTypes:  map[string]ValueType{"key": VALUE_TYPE_STRING, "value": VALUE_TYPE_UINT32},
 		},
 		kv: kv.NewChildNamespace(database.kv, META_TABLE_NAME),
 	}
@@ -133,9 +133,9 @@ func (database *Database) initSystemTables() {
 	database.tables[SCHEMA_TABLE_NAME] = &Table{
 		schema: &TableSchema{
 			Name:         SCHEMA_TABLE_NAME,
-			ColumnTypes:  []ValueType{VALUE_TYPE_STRING, VALUE_TYPE_STRING},
 			ColumnNames:  []string{"name", "definition"},
 			PrimaryIndex: []string{"name"},
+			ColumnTypes:  map[string]ValueType{"name": VALUE_TYPE_STRING, "definition": VALUE_TYPE_STRING},
 		},
 		kv: kv.NewChildNamespace(database.kv, SCHEMA_TABLE_NAME),
 	}
