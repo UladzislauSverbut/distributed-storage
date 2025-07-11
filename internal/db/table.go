@@ -46,16 +46,16 @@ func (table *Table) Get(query *Object) (*Object, error) {
 
 func (table *Table) Find(query *Object) ([]*Object, error) {
 	iteratedIndex, isPrimary := table.getPartialIndex(query)
-	scanResponse := table.kv.Scan(&kv.ScanRequest{Key: iteratedIndex})
+	cursor := table.kv.Scan(&kv.ScanRequest{Key: iteratedIndex})
 
 	records := make([]*Object, 0)
 
 	if isPrimary {
-		for index, value := scanResponse.Current(); table.isSameIndexId(iteratedIndex, index); index, value = scanResponse.Next() {
+		for index, value := cursor.Current(); table.equalIndexes(iteratedIndex, index); index, value = cursor.Next() {
 			records = append(records, table.decodePayload(value))
 		}
 	} else {
-		for index, _ := scanResponse.Current(); table.isSameIndexId(iteratedIndex, index); index, _ = scanResponse.Next() {
+		for index, _ := cursor.Current(); table.equalIndexes(iteratedIndex, index); index, _ = cursor.Next() {
 			primaryIndexValues, _, _ := table.decodeSecondaryIndex(index)
 
 			if response, err := table.kv.Get(&kv.GetRequest{Key: table.encodePrimaryIndex(primaryIndexValues)}); err != nil {
@@ -70,11 +70,11 @@ func (table *Table) Find(query *Object) ([]*Object, error) {
 }
 
 func (table *Table) GetAll() []*Object {
-	scanResponse := table.kv.Scan(&kv.ScanRequest{})
+	cursor := table.kv.Scan(&kv.ScanRequest{})
 
 	records := make([]*Object, 0)
 
-	for _, value := scanResponse.Current(); value != nil; _, value = scanResponse.Next() {
+	for _, value := cursor.Current(); value != nil; _, value = cursor.Next() {
 		records = append(records, table.decodePayload(value))
 	}
 
@@ -185,7 +185,7 @@ func (table *Table) updateSecondaryIndexes(record *Object, oldRecord *Object) er
 func (table *Table) getPrimaryIndex(query *Object) []byte {
 	values := query.GetMany(table.schema.PrimaryIndex)
 
-	if table.hasEmptyValues(values) {
+	if table.containsEmptyValues(values) {
 		return nil
 	}
 
@@ -196,7 +196,7 @@ func (table *Table) getSecondaryIndex(query *Object, secondaryIndexNumber int) [
 	primaryIndexValues := query.GetMany(table.schema.PrimaryIndex)
 	secondaryIndexValues := query.GetMany(table.schema.SecondaryIndexes[secondaryIndexNumber])
 
-	if table.hasEmptyValues(primaryIndexValues) || table.hasEmptyValues(secondaryIndexValues) {
+	if table.containsEmptyValues(primaryIndexValues) || table.containsEmptyValues(secondaryIndexValues) {
 		return nil
 	}
 
@@ -206,7 +206,7 @@ func (table *Table) getSecondaryIndex(query *Object, secondaryIndexNumber int) [
 func (table *Table) getPartialIndex(query *Object) ([]byte, bool) {
 	primaryIndexValues := query.GetMany(table.schema.PrimaryIndex)
 
-	if !table.hasEmptyValues(primaryIndexValues) || len(table.schema.SecondaryIndexes) == 0 {
+	if !table.containsEmptyValues(primaryIndexValues) || len(table.schema.SecondaryIndexes) == 0 {
 		return table.encodePrimaryIndex(table.removeEmptyValues(primaryIndexValues)), true
 	}
 
@@ -336,7 +336,7 @@ func (table *Table) decodeSecondaryIndex(encodedIndex []byte) (primaryIndexValue
 	return
 }
 
-func (table *Table) isSameIndexId(firstEncodedIndex []byte, secondEncodedIndex []byte) bool {
+func (table *Table) equalIndexes(firstEncodedIndex []byte, secondEncodedIndex []byte) bool {
 	if len(firstEncodedIndex) < INDEX_ID_SIZE || len(secondEncodedIndex) < INDEX_ID_SIZE {
 		return false
 	}
@@ -344,7 +344,7 @@ func (table *Table) isSameIndexId(firstEncodedIndex []byte, secondEncodedIndex [
 	return bytes.Equal(firstEncodedIndex[0:INDEX_ID_SIZE], secondEncodedIndex[0:INDEX_ID_SIZE])
 }
 
-func (table *Table) hasEmptyValues(values []Value) bool {
+func (table *Table) containsEmptyValues(values []Value) bool {
 	return slices.IndexFunc(values, func(value Value) bool { return value.Empty() }) >= 0
 }
 
