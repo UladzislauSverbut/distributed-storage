@@ -12,11 +12,11 @@ type IntValue[T SupportedInts] struct {
 	num T
 }
 
-func (value *IntValue[T]) Get() T {
+func (value *IntValue[T]) Value() T {
 	return value.num
 }
 
-func (value *IntValue[T]) GetType() ValueType {
+func (value *IntValue[T]) Type() ValueType {
 	return VALUE_TYPE_INT64
 }
 

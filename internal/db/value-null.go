@@ -3,11 +3,11 @@ package db
 type NullValue struct {
 }
 
-func (value *NullValue) Get() {
+func (value *NullValue) Value() {
 	return
 }
 
-func (value *NullValue) GetType() ValueType {
+func (value *NullValue) Type() ValueType {
 	return VALUE_TYPE_NULL
 }
 

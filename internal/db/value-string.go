@@ -6,11 +6,11 @@ type StringValue struct {
 	str []byte
 }
 
-func (value *StringValue) Get() string {
+func (value *StringValue) Value() string {
 	return string(value.str)
 }
 
-func (value *StringValue) GetType() ValueType {
+func (value *StringValue) Type() ValueType {
 	return VALUE_TYPE_STRING
 }
 

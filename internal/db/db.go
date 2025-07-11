@@ -97,7 +97,7 @@ func (database *Database) getTableSchema(tableName string) *TableSchema {
 
 	tableSchema := &TableSchema{}
 
-	if err := json.Unmarshal([]byte(record.Get("definition").(*StringValue).Get()), tableSchema); err != nil {
+	if err := json.Unmarshal([]byte(record.Get("definition").(*StringValue).Value()), tableSchema); err != nil {
 		panic(fmt.Errorf("Database can`t parse scheme %w", err))
 	}
 

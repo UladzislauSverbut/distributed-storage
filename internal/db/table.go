@@ -51,11 +51,11 @@ func (table *Table) Find(query *Object) ([]*Object, error) {
 	records := make([]*Object, 0)
 
 	if isPrimary {
-		for index, value := cursor.Current(); table.equalIndexes(iteratedIndex, index); index, value = cursor.Next() {
+		for index, value := cursor.Current(); table.matchIndexes(index, iteratedIndex); index, value = cursor.Next() {
 			records = append(records, table.decodePayload(value))
 		}
 	} else {
-		for index, _ := cursor.Current(); table.equalIndexes(iteratedIndex, index); index, _ = cursor.Next() {
+		for index, _ := cursor.Current(); table.matchIndexes(index, iteratedIndex); index, _ = cursor.Next() {
 			primaryIndexValues, _, _ := table.decodeSecondaryIndex(index)
 
 			if response, err := table.kv.Get(&kv.GetRequest{Key: table.encodePrimaryIndex(primaryIndexValues)}); err != nil {
@@ -336,12 +336,14 @@ func (table *Table) decodeSecondaryIndex(encodedIndex []byte) (primaryIndexValue
 	return
 }
 
-func (table *Table) equalIndexes(firstEncodedIndex []byte, secondEncodedIndex []byte) bool {
-	if len(firstEncodedIndex) < INDEX_ID_SIZE || len(secondEncodedIndex) < INDEX_ID_SIZE {
+func (table *Table) matchIndexes(firstEncodedIndex []byte, secondEncodedIndex []byte) bool {
+	sharedIndexSize := min(len(firstEncodedIndex), len(secondEncodedIndex))
+
+	if sharedIndexSize == 0 {
 		return false
 	}
 
-	return bytes.Equal(firstEncodedIndex[0:INDEX_ID_SIZE], secondEncodedIndex[0:INDEX_ID_SIZE])
+	return bytes.Equal(firstEncodedIndex[0:sharedIndexSize], secondEncodedIndex[0:sharedIndexSize])
 }
 
 func (table *Table) containsEmptyValues(values []Value) bool {
