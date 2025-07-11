@@ -51,9 +51,7 @@ func NewChildNamespace(parent *Namespace, namespace string) *Namespace {
 }
 
 func (namespace *Namespace) Set(request *SetRequest) (response *SetResponse, err error) {
-	response, err = namespace.KeyValue.Set(request)
-
-	if err != nil {
+	if response, err = namespace.KeyValue.Set(request); err != nil {
 		return
 	}
 
@@ -65,9 +63,7 @@ func (namespace *Namespace) Set(request *SetRequest) (response *SetResponse, err
 }
 
 func (namespace *Namespace) Delete(request *DeleteRequest) (response *DeleteResponse, err error) {
-	response, err = namespace.KeyValue.Delete(request)
-
-	if err != nil {
+	if response, err = namespace.KeyValue.Delete(request); err != nil {
 		return
 	}
 

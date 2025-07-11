@@ -26,6 +26,7 @@ func (kv *KeyValue) Set(request *SetRequest) (*SetResponse, error) {
 	if err != nil {
 		return &SetResponse{}, err
 	}
+
 	if oldValue != nil {
 		return &SetResponse{Updated: true, OldValue: oldValue}, nil
 	}

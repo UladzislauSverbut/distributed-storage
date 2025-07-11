@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"distributed-storage/internal/kv"
 	"encoding/binary"
 	"fmt"
@@ -13,7 +14,8 @@ const (
 	MODE_INSERT             // insert record
 )
 
-const PRIMARY_INDEX_ID uint32 = 0
+const PRIMARY_INDEX_ID int = 0
+const INDEX_ID_SIZE int = 4
 
 type TableSchema struct {
 	Name             string
@@ -29,42 +31,39 @@ type Table struct {
 }
 
 func (table *Table) Get(query *Object) (*Object, error) {
-	key := table.getPrimaryIndex(query)
+	index := table.getPrimaryIndex(query)
 
-	if key == nil {
+	if index == nil {
 		return nil, fmt.Errorf("Table cant`t find record because one of primary index columns is missed: %s", query)
 	}
 
-	response, err := table.kv.Get(&kv.GetRequest{Key: key})
-
-	if err != nil {
+	if response, err := table.kv.Get(&kv.GetRequest{Key: index}); err != nil {
 		return nil, err
+	} else {
+		return table.decodePayload(response.Value), err
 	}
-
-	return table.decodePayload(response.Value), err
 }
 
 func (table *Table) Find(query *Object) ([]*Object, error) {
-	scanResponse := table.kv.Scan(&kv.ScanRequest{Key: table.getPartialIndex(query)})
+	iteratedIndex, isPrimary := table.getPartialIndex(query)
+	scanResponse := table.kv.Scan(&kv.ScanRequest{Key: iteratedIndex})
 
 	records := make([]*Object, 0)
 
-	for index, value := scanResponse.Current(); value != nil; index, value = scanResponse.Next() {
-
-		if table.isPrimaryIndex(index) {
+	if isPrimary {
+		for index, value := scanResponse.Current(); table.isSameIndexId(iteratedIndex, index); index, value = scanResponse.Next() {
 			records = append(records, table.decodePayload(value))
-		} else {
+		}
+	} else {
+		for index, _ := scanResponse.Current(); table.isSameIndexId(iteratedIndex, index); index, _ = scanResponse.Next() {
 			primaryIndexValues, _, _ := table.decodeSecondaryIndex(index)
 
-			response, err := table.kv.Get(&kv.GetRequest{Key: table.encodePrimaryIndex(primaryIndexValues)})
-
-			if err != nil {
+			if response, err := table.kv.Get(&kv.GetRequest{Key: table.encodePrimaryIndex(primaryIndexValues)}); err != nil {
 				return nil, err
+			} else {
+				records = append(records, table.decodePayload(response.Value))
 			}
-
-			records = append(records, table.decodePayload(response.Value))
 		}
-
 	}
 
 	return records, nil
@@ -204,31 +203,26 @@ func (table *Table) getSecondaryIndex(query *Object, secondaryIndexNumber int) [
 	return table.encodeSecondaryIndex(primaryIndexValues, secondaryIndexValues, secondaryIndexNumber)
 }
 
-func (table *Table) getPartialIndex(query *Object) []byte {
-	primaryIndexValues := table.removeEmptyValues(query.GetMany(table.schema.PrimaryIndex))
-	primaryIndex := table.encodePrimaryIndex(primaryIndexValues)
+func (table *Table) getPartialIndex(query *Object) ([]byte, bool) {
+	primaryIndexValues := query.GetMany(table.schema.PrimaryIndex)
 
-	if len(table.schema.SecondaryIndexes) == 0 {
-		return primaryIndex
+	if !table.hasEmptyValues(primaryIndexValues) || len(table.schema.SecondaryIndexes) == 0 {
+		return table.encodePrimaryIndex(table.removeEmptyValues(primaryIndexValues)), true
 	}
 
-	matchedSecondaryIndex := 0
-	matchedSecondaryIndexValues := table.removeEmptyValues(query.GetMany(table.schema.SecondaryIndexes[matchedSecondaryIndex]))
+	matchedSecondaryIndexNumber := 0
+	matchedSecondaryIndexValues := table.removeEmptyValues(query.GetMany(table.schema.SecondaryIndexes[matchedSecondaryIndexNumber]))
 
-	for secondaryIndexIndex := 1; secondaryIndexIndex < len(table.schema.SecondaryIndexes); secondaryIndexIndex++ {
-		secondaryIndexValues := table.removeEmptyValues(query.GetMany(table.schema.SecondaryIndexes[secondaryIndexIndex]))
+	for secondaryIndexNumber := 1; secondaryIndexNumber < len(table.schema.SecondaryIndexes); secondaryIndexNumber++ {
+		secondaryIndexValues := table.removeEmptyValues(query.GetMany(table.schema.SecondaryIndexes[secondaryIndexNumber]))
 
 		if len(secondaryIndexValues) > len(matchedSecondaryIndexValues) {
-			matchedSecondaryIndex = secondaryIndexIndex
+			matchedSecondaryIndexNumber = secondaryIndexNumber
 			matchedSecondaryIndexValues = secondaryIndexValues
 		}
 	}
 
-	if len(primaryIndexValues) >= len(matchedSecondaryIndexValues) {
-		return primaryIndex
-	}
-
-	return table.encodeSecondaryIndex(primaryIndexValues, matchedSecondaryIndexValues, matchedSecondaryIndex)
+	return table.encodeSecondaryIndex(table.removeEmptyValues(primaryIndexValues), matchedSecondaryIndexValues, matchedSecondaryIndexNumber), false
 }
 
 func (table *Table) encodePayload(record *Object) []byte {
@@ -247,14 +241,13 @@ func (table *Table) encodePayload(record *Object) []byte {
 			encodedPayload = append(encodedPayload, byte(1))
 			encodedPayload = append(encodedPayload, columnValue.serialize()...)
 		}
-
 	}
 
 	return encodedPayload
 }
 
 func (table *Table) decodePayload(encodedPayload []byte) *Object {
-	if encodedPayload == nil {
+	if len(encodedPayload) == 0 {
 		return nil
 	}
 
@@ -281,9 +274,9 @@ func (table *Table) encodePrimaryIndex(values []Value) []byte {
 		return nil
 	}
 
-	primaryIndex := make([]byte, 4)
+	primaryIndex := make([]byte, INDEX_ID_SIZE)
 
-	binary.LittleEndian.PutUint32(primaryIndex[0:4], PRIMARY_INDEX_ID)
+	binary.LittleEndian.PutUint32(primaryIndex[0:INDEX_ID_SIZE], uint32(PRIMARY_INDEX_ID))
 
 	for _, value := range values {
 		primaryIndex = append(primaryIndex, value.serialize()...)
@@ -297,9 +290,9 @@ func (table *Table) encodeSecondaryIndex(primaryIndexValues []Value, secondaryIn
 		return nil
 	}
 
-	secondaryIndex := make([]byte, 4)
+	secondaryIndex := make([]byte, INDEX_ID_SIZE)
 
-	binary.LittleEndian.PutUint32(secondaryIndex[0:4], PRIMARY_INDEX_ID+uint32(secondaryIndexNumber+1))
+	binary.LittleEndian.PutUint32(secondaryIndex[0:INDEX_ID_SIZE], uint32(PRIMARY_INDEX_ID+secondaryIndexNumber+1))
 
 	for _, value := range secondaryIndexValues {
 		secondaryIndex = append(secondaryIndex, value.serialize()...)
@@ -315,35 +308,40 @@ func (table *Table) encodeSecondaryIndex(primaryIndexValues []Value, secondaryIn
 }
 
 func (table *Table) decodeSecondaryIndex(encodedIndex []byte) (primaryIndexValues []Value, secondaryIndexValues []Value, secondaryIndexNumber int) {
-	indexId := binary.LittleEndian.Uint32(encodedIndex[0:4])
-	secondaryIndexNumber = int(indexId - PRIMARY_INDEX_ID - 1)
-	encodedIndex = encodedIndex[4:]
+	if len(encodedIndex) < INDEX_ID_SIZE {
+		return
+	}
+
+	indexId := binary.LittleEndian.Uint32(encodedIndex[0:INDEX_ID_SIZE])
+	secondaryIndexNumber = int(indexId) - PRIMARY_INDEX_ID - 1
+
+	encodedIndex = encodedIndex[INDEX_ID_SIZE:]
 
 	for _, columnName := range table.schema.SecondaryIndexes[secondaryIndexNumber] {
 		columnValue := createValue(table.schema.ColumnTypes[columnName])
 		columnValue.parse(encodedIndex)
+		secondaryIndexValues = append(secondaryIndexValues, columnValue)
 
 		encodedIndex = encodedIndex[columnValue.Size():]
-
-		secondaryIndexValues = append(secondaryIndexValues, columnValue)
 	}
 
 	for _, columnName := range table.schema.PrimaryIndex {
 		columnValue := createValue(table.schema.ColumnTypes[columnName])
 		columnValue.parse(encodedIndex)
+		primaryIndexValues = append(primaryIndexValues, columnValue)
 
 		encodedIndex = encodedIndex[columnValue.Size():]
-
-		primaryIndexValues = append(primaryIndexValues, columnValue)
 	}
 
 	return
 }
 
-func (table *Table) isPrimaryIndex(encodedIndex []byte) bool {
-	indexId := binary.LittleEndian.Uint32(encodedIndex[0:4])
+func (table *Table) isSameIndexId(firstEncodedIndex []byte, secondEncodedIndex []byte) bool {
+	if len(firstEncodedIndex) < INDEX_ID_SIZE || len(secondEncodedIndex) < INDEX_ID_SIZE {
+		return false
+	}
 
-	return indexId == PRIMARY_INDEX_ID
+	return bytes.Equal(firstEncodedIndex[0:INDEX_ID_SIZE], secondEncodedIndex[0:INDEX_ID_SIZE])
 }
 
 func (table *Table) hasEmptyValues(values []Value) bool {
