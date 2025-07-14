@@ -298,10 +298,8 @@ func (table *Table) encodeSecondaryIndex(primaryIndexValues []Value, secondaryIn
 		secondaryIndex = append(secondaryIndex, value.serialize()...)
 	}
 
-	if len(primaryIndexValues) > 0 {
-		for _, value := range primaryIndexValues {
-			secondaryIndex = append(secondaryIndex, value.serialize()...)
-		}
+	for _, value := range primaryIndexValues {
+		secondaryIndex = append(secondaryIndex, value.serialize()...)
 	}
 
 	return secondaryIndex
