@@ -14,8 +14,9 @@ const (
 	MODE_INSERT             // insert record
 )
 
-const PRIMARY_INDEX_ID int = 0
-const INDEX_ID_SIZE int = 4
+const PRIMARY_INDEX_ID int = 0 // primary index id, secondary indexes ids start from 1
+
+const INDEX_ID_SIZE int = 4 // size of index section id in bytes
 
 type TableSchema struct {
 	Name             string

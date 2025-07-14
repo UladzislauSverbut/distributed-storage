@@ -11,6 +11,8 @@ import (
 
 const NULL_PAGE = PagePointer(0)
 
+const META_INFO_SIZE = 40 // size of meta info section in file bytes
+
 type PagePointer = uint64
 
 type File struct {
@@ -98,17 +100,17 @@ func NewFileStorage(file *os.File, pageSize int) (*FileStorage, error) {
 
 func (storage *FileStorage) GetMetaInfo() []byte {
 	masterPage := storage.getMasterPage()
-	return masterPage[40:]
+	return masterPage[META_INFO_SIZE:]
 }
 
 func (storage *FileStorage) SaveMetaInfo(meta []byte) error {
-	if len(meta) > storage.pageSize-40 {
+	if len(meta) > storage.pageSize-META_INFO_SIZE {
 		panic(fmt.Sprintf("FileSystem storage couldn`t store metadata with size %d", len(meta)))
 	}
 
 	masterPage := storage.getMasterPage()
 
-	copy(masterPage[40:], meta)
+	copy(masterPage[META_INFO_SIZE:], meta)
 
 	if _, err := storage.file.pointer.WriteAt(masterPage, 0); err != nil {
 		return err
