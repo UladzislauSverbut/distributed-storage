@@ -39,11 +39,11 @@ func NewBTreeFileStorage(filePath string, pageSize int) *BTreeFileStorage {
 		panic(fmt.Errorf("BTreeFileStorage can`t read data file: %w", err))
 	}
 
-	if fs.GetNumberOfPages() > 1 {
+	if fs.GetPagesCount() > 1 {
 		// validate root node pointer
 		rootPointer := binary.LittleEndian.Uint64(fs.GetMetaInfo())
 
-		if rootPointer > uint64(fs.GetNumberOfPages()) {
+		if rootPointer > uint64(fs.GetPagesCount()) {
 			panic(fmt.Errorf("BTreeFileStorage can`t read data file because content is corrupted: %w", err))
 		}
 	}
@@ -52,7 +52,7 @@ func NewBTreeFileStorage(filePath string, pageSize int) *BTreeFileStorage {
 }
 
 func (treeStorage *BTreeFileStorage) GetRoot() BTreeRootPointer {
-	if treeStorage.fs.GetNumberOfPages() > 1 {
+	if treeStorage.fs.GetPagesCount() > 1 {
 		return binary.LittleEndian.Uint64(treeStorage.fs.GetMetaInfo())
 	}
 
@@ -60,7 +60,7 @@ func (treeStorage *BTreeFileStorage) GetRoot() BTreeRootPointer {
 }
 
 func (treeStorage *BTreeFileStorage) SaveRoot(pointer BTreeRootPointer) error {
-	if err := treeStorage.fs.SavePages(); err != nil {
+	if err := treeStorage.fs.SaveChanges(); err != nil {
 		return err
 	}
 
@@ -76,10 +76,7 @@ func (treeStorage *BTreeFileStorage) Get(pointer BNodePointer) *BNode {
 }
 
 func (treeStorage *BTreeFileStorage) Create(node *BNode) BNodePointer {
-	pointer := treeStorage.fs.CreatePage()
-	data := treeStorage.fs.GetPage(pointer)
-
-	copy(data, node.data)
+	pointer := treeStorage.fs.CreatePage(node.data)
 
 	return BNodePointer(pointer)
 }
