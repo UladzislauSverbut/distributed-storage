@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const HEADER_SIZE = 4
+const HEADER_SIZE = 4 // size of node header in file bytes
 
 const NULL_NODE = BNodePointer(0)
 

@@ -21,16 +21,14 @@ type File struct {
 }
 
 type FileStorage struct {
-	file                File
-	fileMemory          [][]byte
-	fileMemorySize      int
-	pageSize            int
-	pagesCount          int                    // count of total pages
-	reusedPagesCount    int                    // count of pages that were reused
-	releasedPagesCount  int                    // count of pages that were released
-	availablePagesCount int                    // count of pages that can be reused
-	pagePool            PagePointer            // pointer to pool of available file pages
-	pageBuffer          map[PagePointer][]byte // map of buffered pages that will be synced with file
+	file             File
+	fileMemory       [][]byte
+	fileMemorySize   int
+	pageSize         int
+	pagesCount       int                    // count of total pages
+	reusedPagesCount int                    // count of pages that were reused
+	pagePool         *PagePool              //  pool of available file pages
+	pageBuffer       map[PagePointer][]byte // map of buffered pages that will be synced with file
 }
 
 const STORAGE_SIGNATURE = "FILE_STORAGE_SIG"
@@ -41,8 +39,8 @@ const STORAGE_SIGNATURE = "FILE_STORAGE_SIG"
 
 	Mater Page Format
 
- 	| signature | number of stored pages |  number of available pages |  page pool pointer | user meta info |
-	|    16B    |            8B          |              8B            |          8B        |     ...rest    |
+ 	| signature | number of stored pages | page pool pointer | user meta info |
+	|    16B    |            8B          |         8B        |     ...rest    |
 */
 
 func NewFileStorage(file *os.File, pageSize int) (*FileStorage, error) {
@@ -80,18 +78,17 @@ func NewFileStorage(file *os.File, pageSize int) (*FileStorage, error) {
 			pointer: file,
 			size:    fileSize,
 		},
-		fileMemory:         [][]byte{virtualMemory},
-		fileMemorySize:     fileSize,
-		pageSize:           pageSize,
-		pagesCount:         0,
-		reusedPagesCount:   0,
-		releasedPagesCount: 0,
-		pageBuffer:         map[PagePointer][]byte{},
+		fileMemory:       [][]byte{virtualMemory},
+		fileMemorySize:   fileSize,
+		pageSize:         pageSize,
+		pagesCount:       0,
+		reusedPagesCount: 0,
+		pageBuffer:       map[PagePointer][]byte{},
 	}
 
 	if firstInitialization {
 		fs.pagesCount = 1 // reserve master page
-		fs.pagePool = fs.allocateVirtualPage()
+		fs.pagePool = NewPagePool(fs.allocateVirtualPage(), fs)
 	} else {
 		if err = fs.parseMasterPage(); err != nil {
 			return nil, err
@@ -176,21 +173,13 @@ func (storage *FileStorage) getFilePage(pointer PagePointer) []byte {
 }
 
 func (storage *FileStorage) reuseFilePage() PagePointer {
-	if storage.reusedPagesCount == storage.availablePagesCount {
+	if storage.reusedPagesCount == storage.pagePool.getPagesCont() {
 		return NULL_PAGE
 	}
 
-	pagePool := NewPagePool(storage.pageSize, storage.GetPage(storage.pagePool))
-	pageNumber := storage.reusedPagesCount
+	storage.reusedPagesCount++
 
-	for pageNumber > pagePool.getPagesCount() {
-		pageNumber -= pagePool.getPagesCount()
-		pagePool = NewPagePool(storage.pageSize, storage.GetPage(pagePool.getNextPagePool()))
-	}
-
-	storage.reusedPagesCount += 1
-
-	return pagePool.getPage(pageNumber)
+	return storage.pagePool.getPage(storage.reusedPagesCount - 1)
 }
 
 func (storage *FileStorage) allocateVirtualPage() PagePointer {
@@ -202,24 +191,13 @@ func (storage *FileStorage) allocateVirtualPage() PagePointer {
 	return pointer
 }
 
-func (storage *FileStorage) addReleasedPagesToPool() {
-	releasedPages := make([]PagePointer, 0, storage.releasedPagesCount)
-
-	for pointer, page := range storage.pageBuffer {
-		if page == nil {
-			releasedPages = append(releasedPages, pointer)
-		}
-	}
-
-}
-
 func (storage *FileStorage) syncPagesWithFile() error {
 	if err := storage.file.pointer.Sync(); err != nil {
 		return err
 	}
 
-	storage.pagesCount += len(storage.allocatedPages)
 	storage.pageBuffer = map[uint64][]byte{}
+	storage.reusedPagesCount = 0
 
 	storage.saveMasterPage()
 
@@ -227,18 +205,31 @@ func (storage *FileStorage) syncPagesWithFile() error {
 }
 
 func (storage *FileStorage) saveAllocatedPages() error {
-	totalPages := storage.pagesNumber + len(storage.allocatedPages)
 
-	if err := storage.extendFile(totalPages); err != nil {
+	releasedPages := make([]PagePointer, 0)
+
+	for pointer, page := range storage.pageBuffer {
+		if page == nil {
+			releasedPages = append(releasedPages, pointer)
+		}
+	}
+
+	storage.pagesCount += len(storage.pageBuffer) - len(releasedPages)
+
+	if err := storage.extendFile(storage.pagesCount); err != nil {
 		return err
 	}
 
-	if err := storage.splitFile(totalPages); err != nil {
+	if err := storage.splitFile(storage.pagesCount); err != nil {
 		return err
 	}
 
-	for pointer, page := range storage.allocatedPages {
-		copy(storage.getFilePage(uint64(pointer)), page)
+	storage.pagePool.updatePages(storage.reusedPagesCount, releasedPages)
+
+	for pointer, page := range storage.pageBuffer {
+		if page != nil {
+			copy(storage.getFilePage(uint64(pointer)), page)
+		}
 	}
 
 	return nil
@@ -253,24 +244,21 @@ func (storage *FileStorage) saveMasterPage() {
 
 	copy(masterPage[0:16], []byte(STORAGE_SIGNATURE))
 	binary.LittleEndian.PutUint64(masterPage[16:], uint64(storage.pagesCount))
-	binary.LittleEndian.PutUint64(masterPage[24:], uint64(storage.availablePagesCount))
-	binary.LittleEndian.PutUint64(masterPage[32:], uint64(storage.pagePool))
+	binary.LittleEndian.PutUint64(masterPage[24:], uint64(storage.pagePool.head))
 }
 
 func (storage *FileStorage) parseMasterPage() error {
 	masterPage := storage.GetPage(PagePointer(0))
 	fileSignature := masterPage[0:16]
 	pagesCount := binary.LittleEndian.Uint64((masterPage[16:]))
-	availablePagesCount := binary.LittleEndian.Uint64((masterPage[24:]))
-	pagePool := binary.LittleEndian.Uint64((masterPage[32:]))
+	pagePoolHead := binary.LittleEndian.Uint64((masterPage[24:]))
 
 	if !bytes.Equal([]byte(STORAGE_SIGNATURE), fileSignature) {
 		return errors.New("FileSystem storage file is corrupted")
 	}
 
 	storage.pagesCount = int(pagesCount)
-	storage.availablePagesCount = int(availablePagesCount)
-	storage.pagePool = pagePool
+	storage.pagePool = NewPagePool(PagePointer(pagePoolHead), storage)
 
 	return nil
 }
