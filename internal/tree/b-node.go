@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const HEADER_SIZE = 4
+const HEADER_SIZE = 4 // size of node header in file bytes
 
 const NULL_NODE = BNodePointer(0)
 
@@ -21,8 +21,8 @@ type BNodeKeyPosition = uint16
 /*
 	Node Format
 
-	| type (Leaf of Parent)   | number of stored keys | pointers to child nodes (used by Parent)   | offsets of key-value pairs (used by Leaf) |                             key-value pairs                         |
-	|          2B             |          2B           |            numberOfKeys * 8B               |          numberOfKeys * 2B                | {keyLength 2B} {valueLength 2B} {key keyLength} {value valueLength} |
+	| type (Leaf of Parent) | number of stored keys | pointers to child nodes (used by Parent)   | offsets of key-value pairs (used by Leaf) |                             key-value pairs                         |
+	|          2B           |          2B           |              numberOfKeys * 8B             |            numberOfKeys * 2B              | {keyLength 2B} {valueLength 2B} {key keyLength} {value valueLength} |
 
 */
 
