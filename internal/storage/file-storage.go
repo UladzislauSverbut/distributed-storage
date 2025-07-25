@@ -21,14 +21,15 @@ type File struct {
 }
 
 type FileStorage struct {
-	file             File
-	fileMemory       [][]byte
-	fileMemorySize   int
-	pageSize         int
-	pagesCount       int                    // count of total pages
-	reusedPagesCount int                    // count of pages that were reused
-	pagePool         *PagePool              //  pool of available file pages
-	pageBuffer       map[PagePointer][]byte // map of buffered pages that will be synced with file
+	file               File
+	fileMemory         [][]byte
+	fileMemorySize     int
+	pageSize           int
+	pagesCount         int                    // count of total pages
+	reusedPagesCount   int                    // count of pages that were reused
+	releasedPagesCount int                    // count of pages that were released
+	pagePool           *PagePool              //  pool of available file pages
+	pageBuffer         map[PagePointer][]byte // map of buffered pages that will be synced with file
 }
 
 const STORAGE_SIGNATURE = "FILE_STORAGE_SIG"
@@ -78,12 +79,13 @@ func NewFileStorage(file *os.File, pageSize int) (*FileStorage, error) {
 			pointer: file,
 			size:    fileSize,
 		},
-		fileMemory:       [][]byte{virtualMemory},
-		fileMemorySize:   fileSize,
-		pageSize:         pageSize,
-		pagesCount:       0,
-		reusedPagesCount: 0,
-		pageBuffer:       map[PagePointer][]byte{},
+		fileMemory:         [][]byte{virtualMemory},
+		fileMemorySize:     fileSize,
+		pageSize:           pageSize,
+		pagesCount:         0,
+		reusedPagesCount:   0,
+		releasedPagesCount: 0,
+		pageBuffer:         map[PagePointer][]byte{},
 	}
 
 	if firstInitialization {
@@ -141,6 +143,7 @@ func (storage *FileStorage) CreatePage(data []byte) PagePointer {
 
 func (storage *FileStorage) DeletePage(pointer PagePointer) {
 	storage.pageBuffer[pointer] = nil
+	storage.releasedPagesCount++
 }
 
 func (storage *FileStorage) GetPagesCount() int {
@@ -184,7 +187,7 @@ func (storage *FileStorage) reuseFilePage() PagePointer {
 
 func (storage *FileStorage) allocateVirtualPage() PagePointer {
 	page := make([]byte, storage.pageSize)
-	pointer := PagePointer(storage.pagesCount + len(storage.pageBuffer))
+	pointer := PagePointer(storage.pagesCount + len(storage.pageBuffer) - storage.releasedPagesCount)
 
 	storage.pageBuffer[pointer] = page
 
@@ -198,6 +201,7 @@ func (storage *FileStorage) syncPagesWithFile() error {
 
 	storage.pageBuffer = map[uint64][]byte{}
 	storage.reusedPagesCount = 0
+	storage.releasedPagesCount = 0
 
 	storage.saveMasterPage()
 
@@ -205,8 +209,7 @@ func (storage *FileStorage) syncPagesWithFile() error {
 }
 
 func (storage *FileStorage) saveAllocatedPages() error {
-
-	releasedPages := make([]PagePointer, 0)
+	releasedPages := make([]PagePointer, 0, storage.releasedPagesCount)
 
 	for pointer, page := range storage.pageBuffer {
 		if page == nil {
@@ -214,7 +217,9 @@ func (storage *FileStorage) saveAllocatedPages() error {
 		}
 	}
 
-	storage.pagesCount += len(storage.pageBuffer) - len(releasedPages)
+	storage.pagePool.updatePages(storage.reusedPagesCount, releasedPages)
+
+	storage.pagesCount += len(storage.pageBuffer) - storage.releasedPagesCount
 
 	if err := storage.extendFile(storage.pagesCount); err != nil {
 		return err
@@ -223,8 +228,6 @@ func (storage *FileStorage) saveAllocatedPages() error {
 	if err := storage.splitFile(storage.pagesCount); err != nil {
 		return err
 	}
-
-	storage.pagePool.updatePages(storage.reusedPagesCount, releasedPages)
 
 	for pointer, page := range storage.pageBuffer {
 		if page != nil {

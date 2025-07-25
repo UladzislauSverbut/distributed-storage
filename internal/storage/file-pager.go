@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/binary"
+	"fmt"
 )
 
 const HEADER_SIZE = 18 // size of node header in file bytes
@@ -28,8 +29,8 @@ func NewPagePool(head PagePointer, storage *FileStorage) *PagePool {
 func (pool *PagePool) getPage(pageNumber int) PagePointer {
 	node := pool.storage.GetPage(pool.head)
 
-	for pool.getNodePagesCount(node) < pageNumber {
-		pageNumber -= pool.getNodePagesCount(node)
+	for pool.getNodeSize(node) < pageNumber {
+		pageNumber -= pool.getNodeSize(node)
 		node = pool.storage.GetPage((pool.getPreviousNode(node)))
 	}
 
@@ -39,110 +40,104 @@ func (pool *PagePool) getPage(pageNumber int) PagePointer {
 func (pool *PagePool) getPagesCont() int {
 	node := pool.storage.GetPage(pool.head)
 
-	return pool.getNodeTotalPagesCount(node)
+	return pool.getNodeTotalPages(node)
 }
 
-func (pool *PagePool) updatePages(reusedPagesCount int, releasedPages []PagePointer) {
+func (pool *PagePool) updatePages(removedPagesCount int, addedPages []PagePointer) {
 	nodePointer := pool.head
 	node := pool.storage.GetPage(nodePointer)
-	pagesCount := pool.getNodeMaxPagesCount(node)
-	reusedPages := make([]PagePointer, 0)
+	reusablePages := make([]PagePointer, 0)
 
-	for pagesCount <= reusedPagesCount {
-		reusedPagesCount -= pagesCount
+	if pool.getNodeTotalPages(node) < removedPagesCount {
+		panic(fmt.Sprintf("PagePool: not enough pages to remove %d pages", removedPagesCount))
+	}
 
-		reusedPages = append(reusedPages, nodePointer)
+	for removedPagesCount > 0 && removedPagesCount >= pool.getNodeSize(node) {
+		addedPages = append(addedPages, nodePointer)
+
+		removedPagesCount -= pool.getNodeSize(node)
+		nodePointer = pool.getPreviousNode(node)
+		node = pool.storage.GetPage(nodePointer)
+	}
+
+	if removedPagesCount != 0 {
+		addedPages = append(addedPages, nodePointer)
+
+		reusablePages = pool.getNodePages(node, removedPagesCount, pool.getNodeSize(node))
 
 		nodePointer = pool.getPreviousNode(node)
 		node = pool.storage.GetPage(nodePointer)
-		pagesCount = pool.getNodePagesCount(node)
 	}
 
-	if reusedPagesCount != 0 {
-		for pageNumber := reusedPagesCount; pageNumber < pagesCount; pageNumber++ {
-			reusedPages = append(reusedPages, pool.getNodePage(node, pageNumber))
-		}
-
-		nodePointer = pool.getPreviousNode(node)
-	}
-
-	for len(releasedPages) > 0 {
-		pages := releasedPages[:min(len(releasedPages), pagesCount)]
-		releasedPages = releasedPages[len(pages):]
-
+	for len(addedPages) > 0 {
 		newNodePointer := NULL_PAGE
 
-		if len(reusedPages) > 0 {
-			newNodePointer = releasedPages[0]
-			releasedPages = releasedPages[1:]
+		if len(reusablePages) > 0 {
+			newNodePointer = reusablePages[0]
+			reusablePages = reusablePages[1:]
 		} else {
 			newNodePointer = pool.storage.allocateVirtualPage()
 		}
 
 		newNode := pool.storage.GetPage(newNodePointer)
 
-		pool.setNodePrevious(newNode, nodePointer)
-		pool.addNodePages(newNode, pages)
+		pool.constructNode(newNode, node, nodePointer, addedPages[:min(pool.getNodeCapacity(newNode), len(addedPages))])
 
+		addedPages = addedPages[min(pool.getNodeCapacity(newNode), len(addedPages)):]
 		nodePointer = newNodePointer
 		node = newNode
+
+		if len(addedPages) == 0 && len(reusablePages) > 0 {
+			addedPages = append(addedPages, reusablePages[0])
+			reusablePages = reusablePages[1:]
+		}
 	}
 
-	for len(reusedPages) > 0 {
-		newNodePointer := reusedPages[0]
-		reusedPages = reusedPages[1:]
-		newNode := pool.storage.GetPage(newNodePointer)
+	pool.head = nodePointer
+}
 
-		pool.setNodePrevious(newNode, nodePointer)
-		pool.addNodePages(newNode, reusedPages[:pagesCount])
+func (pool *PagePool) constructNode(node []byte, previousNode []byte, previousNodePointer PagePointer, storedPages []PagePointer) {
+	storedPagesCount := len(storedPages)
 
-		reusedPages = reusedPages[:pagesCount]
+	if pool.getNodeCapacity(node) < storedPagesCount {
+		panic(fmt.Sprintf("PagePool: not enough space in node to store %d pages", storedPagesCount))
+	}
 
-		nodePointer = newNodePointer
-		node = newNode
+	binary.LittleEndian.PutUint16(node, uint16(storedPagesCount))
+	binary.LittleEndian.PutUint64(node[2:], uint64(pool.getNodeTotalPages(previousNode)+storedPagesCount))
+	binary.LittleEndian.PutUint64(node[10:], previousNodePointer)
+
+	for i, pagePointer := range storedPages {
+		binary.LittleEndian.PutUint64(node[HEADER_SIZE+(i*8):], pagePointer)
 	}
 }
 
-func (pool *PagePool) getNodeTotalPagesCount(node []byte) int {
-	return int(binary.LittleEndian.Uint64(node[2:]))
+func (pool *PagePool) getNodeTotalPages(node []byte) int {
+	return int(binary.LittleEndian.Uint64(node[2:10]))
 }
 
-func (pool *PagePool) getNodePage(node []byte, pageNumber int) PagePointer {
-	pageAddress := 10 + 8*pageNumber
-
-	return PagePointer(binary.LittleEndian.Uint64(node[pageAddress:]))
-}
-
-func (pool *PagePool) getNodePagesCount(node []byte) int {
+func (pool *PagePool) getNodeSize(node []byte) int {
 	return int(binary.LittleEndian.Uint16(node))
 }
 
-func (pool *PagePool) getPreviousNode(node []byte) PagePointer {
-	return binary.LittleEndian.Uint64(node[10:])
-}
-
 func (pool *PagePool) getNodeCapacity(node []byte) int {
-	return pool.getNodeMaxPagesCount(node) - pool.getNodePagesCount(node)
-}
-
-func (pool *PagePool) getNodeMaxPagesCount(node []byte) int {
 	return (len(node) - HEADER_SIZE) / 8
 }
 
-func (pool *PagePool) setNodePrevious(node []byte, previousNodePointer PagePointer) {
-	totalPagesNumber := pool.getNodePagesCount(node) + pool.getNodePagesCount((pool.storage.GetPage(previousNodePointer)))
-
-	binary.LittleEndian.PutUint64(node[2:], uint64(totalPagesNumber))
-	binary.LittleEndian.PutUint64(node[10:], uint64(previousNodePointer))
+func (pool *PagePool) getPreviousNode(node []byte) PagePointer {
+	return PagePointer(binary.LittleEndian.Uint64(node[10:]))
 }
 
-func (pool *PagePool) addNodePages(node []byte, pages []PagePointer) {
-	if pool.getNodeCapacity(node) < len(pages) {
-		panic("PagePool is full")
-	}
-	totalPagesCount := pool.getNodeTotalPagesCount(node)
-	pagesCount := len(pages)
+func (pool *PagePool) getNodePage(node []byte, pageNumber int) PagePointer {
+	return PagePointer(binary.LittleEndian.Uint64(node[HEADER_SIZE+(pageNumber*8):]))
+}
 
-	binary.LittleEndian.PutUint16(node, uint16(pagesCount))
-	binary.LittleEndian.PutUint64(node[10:], uint64(totalPagesCount+pagesCount))
+func (pool *PagePool) getNodePages(node []byte, start int, end int) []PagePointer {
+	pages := make([]PagePointer, 0, end-start)
+
+	for pageNumber := start; pageNumber < end; pageNumber++ {
+		pages = append(pages, pool.getNodePage(node, pageNumber))
+	}
+
+	return pages
 }
