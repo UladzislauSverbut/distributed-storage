@@ -239,7 +239,7 @@ func (storage *FileStorage) saveAllocatedPages() error {
 }
 
 func (storage *FileStorage) getMasterPage() []byte {
-	return storage.getFilePage(PagePointer(0))
+	return storage.GetPage(PagePointer(0))
 }
 
 func (storage *FileStorage) saveMasterPage() {

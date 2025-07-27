@@ -81,6 +81,11 @@ func (pool *PagePool) updatePages(removedPagesCount int, addedPages []PagePointe
 
 		newNode := pool.storage.GetPage(newNodePointer)
 
+		if len(addedPages)+len(reusablePages) <= pool.getNodeCapacity(newNode) {
+			addedPages = append(addedPages, reusablePages...)
+			reusablePages = nil
+		}
+
 		pool.constructNode(newNode, node, nodePointer, addedPages[:min(pool.getNodeCapacity(newNode), len(addedPages))])
 
 		addedPages = addedPages[min(pool.getNodeCapacity(newNode), len(addedPages)):]
