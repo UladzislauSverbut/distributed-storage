@@ -151,6 +151,10 @@ func (storage *FileStorage) GetPagesCount() int {
 }
 
 func (storage *FileStorage) SaveChanges() error {
+	if err := storage.saveReleasedPages(); err != nil {
+		return err
+	}
+
 	if err := storage.saveAllocatedPages(); err != nil {
 		return err
 	}
@@ -194,60 +198,8 @@ func (storage *FileStorage) allocateVirtualPage() PagePointer {
 	return pointer
 }
 
-func (storage *FileStorage) syncPagesWithFile() error {
-	if err := storage.file.pointer.Sync(); err != nil {
-		return err
-	}
-
-	storage.pageBuffer = map[uint64][]byte{}
-	storage.reusedPagesCount = 0
-	storage.releasedPagesCount = 0
-
-	storage.saveMasterPage()
-
-	return nil
-}
-
-func (storage *FileStorage) saveAllocatedPages() error {
-	releasedPages := make([]PagePointer, 0, storage.releasedPagesCount)
-
-	for pointer, page := range storage.pageBuffer {
-		if page == nil {
-			releasedPages = append(releasedPages, pointer)
-		}
-	}
-
-	storage.pagePool.updatePages(storage.reusedPagesCount, releasedPages)
-
-	storage.pagesCount += len(storage.pageBuffer) - storage.releasedPagesCount
-
-	if err := storage.extendFile(storage.pagesCount); err != nil {
-		return err
-	}
-
-	if err := storage.splitFile(storage.pagesCount); err != nil {
-		return err
-	}
-
-	for pointer, page := range storage.pageBuffer {
-		if page != nil {
-			copy(storage.getFilePage(uint64(pointer)), page)
-		}
-	}
-
-	return nil
-}
-
 func (storage *FileStorage) getMasterPage() []byte {
 	return storage.GetPage(PagePointer(0))
-}
-
-func (storage *FileStorage) saveMasterPage() {
-	masterPage := storage.getMasterPage()
-
-	copy(masterPage[0:16], []byte(STORAGE_SIGNATURE))
-	binary.LittleEndian.PutUint64(masterPage[16:], uint64(storage.pagesCount))
-	binary.LittleEndian.PutUint64(masterPage[24:], uint64(storage.pagePool.head))
 }
 
 func (storage *FileStorage) parseMasterPage() error {
@@ -264,6 +216,57 @@ func (storage *FileStorage) parseMasterPage() error {
 	storage.pagePool = NewPagePool(PagePointer(pagePoolHead), storage)
 
 	return nil
+}
+
+func (storage *FileStorage) saveReleasedPages() error {
+	releasedPages := make([]PagePointer, 0, storage.releasedPagesCount)
+
+	for pointer, page := range storage.pageBuffer {
+		if page == nil {
+			releasedPages = append(releasedPages, pointer)
+			delete(storage.pageBuffer, pointer)
+		}
+	}
+
+	storage.pagePool.updatePages(storage.reusedPagesCount, releasedPages)
+
+	storage.releasedPagesCount = 0
+	storage.reusedPagesCount = 0
+
+	return nil
+}
+
+func (storage *FileStorage) saveAllocatedPages() error {
+	storage.pagesCount += len(storage.pageBuffer)
+
+	if err := storage.extendFile(storage.pagesCount); err != nil {
+		return err
+	}
+
+	if err := storage.splitFile(storage.pagesCount); err != nil {
+		return err
+	}
+
+	for pointer, page := range storage.pageBuffer {
+		if page != nil {
+			copy(storage.getFilePage(uint64(pointer)), page)
+		}
+	}
+
+	storage.pageBuffer = map[PagePointer][]byte{}
+
+	return nil
+}
+
+func (storage *FileStorage) syncPagesWithFile() error {
+	masterPage := storage.getMasterPage()
+
+	copy(masterPage[0:16], []byte(STORAGE_SIGNATURE))
+
+	binary.LittleEndian.PutUint64(masterPage[16:], uint64(storage.pagesCount))
+	binary.LittleEndian.PutUint64(masterPage[24:], uint64(storage.pagePool.head))
+
+	return storage.file.pointer.Sync()
 }
 
 func (storage *FileStorage) splitFile(desireNumberOfPages int) error {
