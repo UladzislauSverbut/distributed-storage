@@ -28,7 +28,7 @@ type FileStorage struct {
 	pagesCount         int                    // count of total pages
 	reusedPagesCount   int                    // count of pages that were reused
 	releasedPagesCount int                    // count of pages that were released
-	pagePool           *PagePool              //  pool of available file pages
+	pagePool           *FilePagePool          //  pool of available file pages
 	pageBuffer         map[PagePointer][]byte // map of buffered pages that will be synced with file
 }
 
@@ -90,7 +90,7 @@ func NewFileStorage(file *os.File, pageSize int) (*FileStorage, error) {
 
 	if firstInitialization {
 		fs.pagesCount = 1 // reserve master page
-		fs.pagePool = NewPagePool(fs.allocateVirtualPage(), fs)
+		fs.pagePool = NewFilePagePool(fs.allocateVirtualPage(), fs)
 	} else {
 		if err = fs.parseMasterPage(); err != nil {
 			return nil, err
@@ -213,7 +213,7 @@ func (storage *FileStorage) parseMasterPage() error {
 	}
 
 	storage.pagesCount = int(pagesCount)
-	storage.pagePool = NewPagePool(PagePointer(pagePoolHead), storage)
+	storage.pagePool = NewFilePagePool(PagePointer(pagePoolHead), storage)
 
 	return nil
 }
@@ -224,7 +224,7 @@ func (storage *FileStorage) saveReleasedPages() error {
 	for pointer, page := range storage.pageBuffer {
 		if page == nil {
 			releasedPages = append(releasedPages, pointer)
-			delete(storage.pageBuffer, pointer)
+			defer delete(storage.pageBuffer, pointer)
 		}
 	}
 
