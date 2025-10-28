@@ -28,7 +28,7 @@ type TableSchema struct {
 
 type Table struct {
 	schema *TableSchema
-	kv     *kv.Namespace
+	kv     *kv.KeyValue
 }
 
 func (table *Table) Get(query *Object) (*Object, error) {

@@ -11,7 +11,7 @@ const META_TABLE_NAME = "@meta"
 const SCHEMA_TABLE_NAME = "@schemas"
 
 type Database struct {
-	kv     *kv.Namespace
+	kv     *kv.KeyValue
 	tables map[string]*Table
 }
 
@@ -29,7 +29,7 @@ func NewDatabase(config *DatabaseConfig) (*Database, error) {
 	storageDirectory += "/data"
 
 	database := &Database{
-		kv:     kv.NewRootNamespace(storageDirectory),
+		kv:     kv.NewKeyValue(storageDirectory),
 		tables: make(map[string]*Table),
 	}
 
@@ -45,7 +45,7 @@ func (database *Database) Get(tableName string) *Table {
 		schema := database.getTableSchema(tableName)
 
 		if schema != nil {
-			database.tables[tableName] = &Table{schema: schema, kv: kv.NewChildNamespace(database.kv, schema.Name)}
+			database.tables[tableName] = &Table{schema: schema, kv: kv.WithPrefix(database.kv, schema.Name)}
 		}
 	}
 
@@ -67,7 +67,7 @@ func (database *Database) Create(schema *TableSchema) (*Table, error) {
 
 	table = &Table{
 		schema: schema,
-		kv:     kv.NewChildNamespace(database.kv, schema.Name),
+		kv:     kv.WithPrefix(database.kv, schema.Name),
 	}
 
 	return table, nil
@@ -127,7 +127,7 @@ func (database *Database) initSystemTables() {
 			PrimaryIndex: []string{"key"},
 			ColumnTypes:  map[string]ValueType{"key": VALUE_TYPE_STRING, "value": VALUE_TYPE_UINT32},
 		},
-		kv: kv.NewChildNamespace(database.kv, META_TABLE_NAME),
+		kv: kv.WithPrefix(database.kv, META_TABLE_NAME),
 	}
 
 	database.tables[SCHEMA_TABLE_NAME] = &Table{
@@ -137,6 +137,6 @@ func (database *Database) initSystemTables() {
 			PrimaryIndex: []string{"name"},
 			ColumnTypes:  map[string]ValueType{"name": VALUE_TYPE_STRING, "definition": VALUE_TYPE_STRING},
 		},
-		kv: kv.NewChildNamespace(database.kv, SCHEMA_TABLE_NAME),
+		kv: kv.WithPrefix(database.kv, SCHEMA_TABLE_NAME),
 	}
 }
