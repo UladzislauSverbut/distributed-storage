@@ -7,6 +7,7 @@ import (
 )
 
 func increaseFileSize(file *os.File, allocatedFileSize int64) error {
+
 	err := unix.FcntlFstore(file.Fd(), unix.F_ALLOCATECONTIG, &unix.Fstore_t{
 		Flags:   unix.F_ALLOCATECONTIG,
 		Posmode: unix.F_PEOFPOSMODE,
