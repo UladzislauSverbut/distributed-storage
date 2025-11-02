@@ -191,7 +191,7 @@ func (storage *FileStorage) reuseFilePage() PagePointer {
 
 func (storage *FileStorage) allocateVirtualPage() PagePointer {
 	page := make([]byte, storage.pageSize)
-	pointer := PagePointer(storage.pagesCount + len(storage.pageBuffer) - storage.releasedPagesCount)
+	pointer := PagePointer(storage.pagesCount + len(storage.pageBuffer))
 
 	storage.pageBuffer[pointer] = page
 
@@ -237,7 +237,7 @@ func (storage *FileStorage) saveReleasedPages() error {
 }
 
 func (storage *FileStorage) saveAllocatedPages() error {
-	storage.pagesCount += len(storage.pageBuffer)
+	storage.pagesCount += (len(storage.pageBuffer) - storage.releasedPagesCount)
 
 	if err := storage.extendFile(storage.pagesCount); err != nil {
 		return err
