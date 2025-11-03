@@ -67,7 +67,7 @@ func (pool *FilePagePool) removePages(count int) []PagePointer {
 	head := pool.storage.GetPage(headPointer)
 	releasedPages := make([]PagePointer, 0)
 
-	for count >= pool.getNodeSize(head) {
+	for count > pool.getNodeSize(head) {
 		releasedPages = append(releasedPages, headPointer)
 
 		count -= pool.getNodeSize(head)

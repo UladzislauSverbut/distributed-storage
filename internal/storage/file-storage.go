@@ -21,15 +21,16 @@ type File struct {
 }
 
 type FileStorage struct {
-	file               File
-	fileMemory         [][]byte
-	fileMemorySize     int
-	pageSize           int
-	pagesCount         int                    // count of total pages
-	reusedPagesCount   int                    // count of pages that were reused
-	releasedPagesCount int                    // count of pages that were released
-	pagePool           *FilePagePool          //  pool of available file pages
-	pageBuffer         map[PagePointer][]byte // map of buffered pages that will be synced with file
+	file                File
+	fileMemory          [][]byte
+	fileMemorySize      int
+	pageSize            int
+	pagesCount          int                    // count of total pages
+	allocatedPagesCount int                    // count of pages that were allocated before saving
+	reusedPagesCount    int                    // count of pages that were reused before saving
+	releasedPagesCount  int                    // count of pages that were released before saving
+	pagePool            *FilePagePool          //  pool of available file pages
+	pageBuffer          map[PagePointer][]byte // map of buffered pages that will be synced with file
 }
 
 const STORAGE_SIGNATURE = "FILE_STORAGE_SIG"
@@ -79,13 +80,14 @@ func NewFileStorage(file *os.File, pageSize int) (*FileStorage, error) {
 			pointer: file,
 			size:    fileSize,
 		},
-		fileMemory:         [][]byte{virtualMemory},
-		fileMemorySize:     fileSize,
-		pageSize:           pageSize,
-		pagesCount:         0,
-		reusedPagesCount:   0,
-		releasedPagesCount: 0,
-		pageBuffer:         map[PagePointer][]byte{},
+		fileMemory:          [][]byte{virtualMemory},
+		fileMemorySize:      fileSize,
+		pageSize:            pageSize,
+		pagesCount:          0,
+		allocatedPagesCount: 0,
+		reusedPagesCount:    0,
+		releasedPagesCount:  0,
+		pageBuffer:          map[PagePointer][]byte{},
 	}
 
 	if firstInitialization {
@@ -147,10 +149,11 @@ func (storage *FileStorage) DeletePage(pointer PagePointer) {
 }
 
 func (storage *FileStorage) GetPagesCount() int {
-	return storage.pagesCount + len(storage.pageBuffer)
+	return storage.pagesCount + storage.allocatedPagesCount
 }
 
 func (storage *FileStorage) SaveChanges() error {
+	fmt.Print("total storage pages: ", storage.GetPagesCount(), " total allocated pages: ", storage.allocatedPagesCount, " total released pages: ", storage.releasedPagesCount, " total reused pages: ", storage.reusedPagesCount, "\n", "totalPages in pool: ", storage.pagePool.getPagesCont(), "\n	")
 	if err := storage.saveReleasedPages(); err != nil {
 		return err
 	}
@@ -191,8 +194,9 @@ func (storage *FileStorage) reuseFilePage() PagePointer {
 
 func (storage *FileStorage) allocateVirtualPage() PagePointer {
 	page := make([]byte, storage.pageSize)
-	pointer := PagePointer(storage.pagesCount + len(storage.pageBuffer))
+	pointer := PagePointer(storage.pagesCount + storage.allocatedPagesCount)
 
+	storage.allocatedPagesCount++
 	storage.pageBuffer[pointer] = page
 
 	return pointer
@@ -237,7 +241,7 @@ func (storage *FileStorage) saveReleasedPages() error {
 }
 
 func (storage *FileStorage) saveAllocatedPages() error {
-	storage.pagesCount += (len(storage.pageBuffer) - storage.releasedPagesCount)
+	storage.pagesCount += storage.allocatedPagesCount
 
 	if err := storage.extendFile(storage.pagesCount); err != nil {
 		return err
@@ -253,6 +257,7 @@ func (storage *FileStorage) saveAllocatedPages() error {
 		}
 	}
 
+	storage.allocatedPagesCount = 0
 	storage.pageBuffer = map[PagePointer][]byte{}
 
 	return nil
@@ -270,18 +275,24 @@ func (storage *FileStorage) syncPagesWithFile() error {
 }
 
 func (storage *FileStorage) splitFile(desireNumberOfPages int) error {
-	if storage.fileMemorySize >= desireNumberOfPages*storage.pageSize {
+	desiredFileMemorySize := desireNumberOfPages * storage.pageSize
+
+	if storage.fileMemorySize >= desiredFileMemorySize {
 		return nil
 	}
 
-	chunk, err := mapFileToMemory(storage.file.pointer, int64(storage.fileMemorySize), storage.fileMemorySize)
+	for desiredFileMemorySize > 0 {
+		chunk, err := mapFileToMemory(storage.file.pointer, int64(storage.fileMemorySize), storage.fileMemorySize)
 
-	if err != nil {
-		return fmt.Errorf("FileSystem storage can`t add chunks: %w", err)
+		if err != nil {
+			return fmt.Errorf("FileSystem storage can't add chunks: %w", err)
+		}
+
+		storage.fileMemorySize += len(chunk)
+		storage.fileMemory = append(storage.fileMemory, chunk)
+
+		desiredFileMemorySize -= len(chunk)
 	}
-
-	storage.fileMemorySize += len(chunk)
-	storage.fileMemory = append(storage.fileMemory, chunk)
 
 	return nil
 }
