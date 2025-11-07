@@ -12,15 +12,15 @@ const (
 	GREATER_COMPARISON          = 2
 )
 
-type BTreeScanner struct {
+type Scanner struct {
 	tree *BTree
 }
 
-func NewBTreeScanner(tree *BTree) *BTreeScanner {
-	return &BTreeScanner{tree: tree}
+func NewScanner(tree *BTree) *Scanner {
+	return &Scanner{tree: tree}
 }
 
-func (scanner *BTreeScanner) Seek(key []byte, compareStrategy int) (cursor *BTreeCursor) {
+func (scanner *Scanner) Seek(key []byte, compareStrategy int) (cursor *Cursor) {
 	cursor = scanner.seekLessOrEqual(key)
 	foundKey, _ := cursor.Current()
 
@@ -52,9 +52,9 @@ func (scanner *BTreeScanner) Seek(key []byte, compareStrategy int) (cursor *BTre
 	return
 }
 
-func (scanner *BTreeScanner) seekLessOrEqual(key []byte) *BTreeCursor {
+func (scanner *Scanner) seekLessOrEqual(key []byte) *Cursor {
 	tree := scanner.tree
-	cursor := &BTreeCursor{tree: tree}
+	cursor := &Cursor{tree: tree}
 
 	for parentPointer := tree.root; parentPointer != NULL_NODE; {
 		parent := tree.storage.Get(parentPointer)
@@ -72,7 +72,7 @@ func (scanner *BTreeScanner) seekLessOrEqual(key []byte) *BTreeCursor {
 	return cursor
 }
 
-func (scanner *BTreeScanner) compareKeys(key []byte, foundKey []byte, compareStrategy int) bool {
+func (scanner *Scanner) compareKeys(key []byte, foundKey []byte, compareStrategy int) bool {
 	compareResult := bytes.Compare(foundKey, key)
 
 	switch compareStrategy {
@@ -85,6 +85,6 @@ func (scanner *BTreeScanner) compareKeys(key []byte, foundKey []byte, compareStr
 	case LESS_OR_EQUAL_COMPARISON:
 		return compareResult <= 0
 	default:
-		panic(fmt.Sprintf("BTreeScanner doesn`t support comparison strategy %d", compareStrategy))
+		panic(fmt.Sprintf("Scanner doesn`t support comparison strategy %d", compareStrategy))
 	}
 }

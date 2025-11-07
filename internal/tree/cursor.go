@@ -5,12 +5,12 @@ type NodePosition struct {
 	position BNodeKeyPosition
 }
 
-type BTreeCursor struct {
+type Cursor struct {
 	tree *BTree
 	path []*NodePosition
 }
 
-func (cursor *BTreeCursor) Current() ([]byte, []byte) {
+func (cursor *Cursor) Current() ([]byte, []byte) {
 	path := cursor.path[len(cursor.path)-1]
 	parent := path.parent
 	position := path.position
@@ -18,7 +18,7 @@ func (cursor *BTreeCursor) Current() ([]byte, []byte) {
 	return parent.getKey(position), parent.getValue(position)
 }
 
-func (cursor *BTreeCursor) Next() ([]byte, []byte) {
+func (cursor *Cursor) Next() ([]byte, []byte) {
 	if !cursor.HasNext() {
 		return nil, nil
 	}
@@ -34,7 +34,7 @@ func (cursor *BTreeCursor) Next() ([]byte, []byte) {
 	return cursor.Current()
 }
 
-func (cursor *BTreeCursor) Prev() ([]byte, []byte) {
+func (cursor *Cursor) Prev() ([]byte, []byte) {
 	if !cursor.HasPrev() {
 		return nil, nil
 	}
@@ -50,7 +50,7 @@ func (cursor *BTreeCursor) Prev() ([]byte, []byte) {
 	return cursor.Next()
 }
 
-func (cursor *BTreeCursor) HasNext() bool {
+func (cursor *Cursor) HasNext() bool {
 	for pathIndex := len(cursor.path) - 1; pathIndex >= 0; pathIndex-- {
 		nodePosition := cursor.path[pathIndex]
 
@@ -61,7 +61,7 @@ func (cursor *BTreeCursor) HasNext() bool {
 	return false
 }
 
-func (cursor *BTreeCursor) HasPrev() bool {
+func (cursor *Cursor) HasPrev() bool {
 	for pathIndex := len(cursor.path) - 1; pathIndex >= 0; pathIndex-- {
 		nodePosition := cursor.path[pathIndex]
 
@@ -72,13 +72,13 @@ func (cursor *BTreeCursor) HasPrev() bool {
 	return false
 }
 
-func (cursor *BTreeCursor) getCurrentParent() (*BNode, BNodeKeyPosition) {
+func (cursor *Cursor) getCurrentParent() (*BNode, BNodeKeyPosition) {
 	path := cursor.path[len(cursor.path)-1]
 
 	return path.parent, path.position
 }
 
-func (cursor *BTreeCursor) moveToRightSiblingParent() {
+func (cursor *Cursor) moveToRightSiblingParent() {
 	parent, position := cursor.getCurrentParent()
 
 	for parent.getStoredKeysNumber()-1 == position {
@@ -98,7 +98,7 @@ func (cursor *BTreeCursor) moveToRightSiblingParent() {
 	}
 }
 
-func (cursor *BTreeCursor) moveToLeftSiblingParent() {
+func (cursor *Cursor) moveToLeftSiblingParent() {
 	parent, position := cursor.getCurrentParent()
 
 	for position == 0 {
@@ -119,19 +119,19 @@ func (cursor *BTreeCursor) moveToLeftSiblingParent() {
 	}
 }
 
-func (cursor *BTreeCursor) moveToRightSiblingNode() (*BNode, BNodeKeyPosition) {
+func (cursor *Cursor) moveToRightSiblingNode() (*BNode, BNodeKeyPosition) {
 	cursor.path[len(cursor.path)-1].position++
 
 	return cursor.getCurrentParent()
 }
 
-func (cursor *BTreeCursor) moveToLeftSiblingNode() (*BNode, BNodeKeyPosition) {
+func (cursor *Cursor) moveToLeftSiblingNode() (*BNode, BNodeKeyPosition) {
 	cursor.path[len(cursor.path)-1].position--
 
 	return cursor.getCurrentParent()
 }
 
-func (cursor *BTreeCursor) moveToPreviousParent() (*BNode, BNodeKeyPosition) {
+func (cursor *Cursor) moveToPreviousParent() (*BNode, BNodeKeyPosition) {
 	cursor.path = cursor.path[0 : len(cursor.path)-1]
 
 	return cursor.getCurrentParent()

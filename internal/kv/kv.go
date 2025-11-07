@@ -16,7 +16,7 @@ type KeyValue struct {
 	tree      *tree.BTree
 	parent    *KeyValue
 	namespace []byte
-	storage   tree.BTreeStorage
+	storage   tree.Storage
 }
 
 func (kv *KeyValue) Get(request *GetRequest) (*GetResponse, error) {
@@ -26,7 +26,7 @@ func (kv *KeyValue) Get(request *GetRequest) (*GetResponse, error) {
 }
 
 func (kv *KeyValue) Scan(request *ScanRequest) ScanResponse {
-	treeScanner := tree.NewBTreeScanner(kv.tree)
+	treeScanner := tree.NewScanner(kv.tree)
 
 	return treeScanner.Seek(request.Key, tree.GREATER_OR_EQUAL_COMPARISON)
 }
@@ -80,7 +80,7 @@ func (kv *KeyValue) attachToParent() error {
 }
 
 func NewKeyValue(filePath string) *KeyValue {
-	storage := tree.NewBTreeFileStorage(filePath, config.PageSize)
+	storage := tree.NewStorageFile(filePath, config.PageSize)
 
 	return &KeyValue{
 		tree:    tree.NewBTree(storage.GetRoot(), storage, config),

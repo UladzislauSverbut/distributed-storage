@@ -6,7 +6,7 @@ import (
 	"log"
 )
 
-type BTreeRootPointer = uint64
+type BTreeRootPointer = BNodePointer
 
 type BTreeConfig struct {
 	PageSize     int
@@ -14,12 +14,12 @@ type BTreeConfig struct {
 	MaxValueSize int
 }
 type BTree struct {
-	storage BTreeStorage
+	storage Storage
 	root    BNodePointer
 	config  BTreeConfig
 }
 
-func NewBTree(root BTreeRootPointer, storage BTreeStorage, config BTreeConfig) *BTree {
+func NewBTree(root BTreeRootPointer, storage Storage, config BTreeConfig) *BTree {
 	return &BTree{
 		root:    root,
 		storage: storage,
