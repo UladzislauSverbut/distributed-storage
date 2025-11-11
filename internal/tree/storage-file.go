@@ -9,6 +9,7 @@ import (
 
 type StorageFile struct {
 	pageManager *fs.PageManager
+	snapshots   map[SnapshotID]fs.PageManagerState
 }
 
 func NewStorageFile(filePath string, pageSize int) *StorageFile {
@@ -51,15 +52,11 @@ func (storage *StorageFile) GetRoot() BTreeRootPointer {
 }
 
 func (storage *StorageFile) SaveRoot(pointer BTreeRootPointer) error {
-	if err := storage.pageManager.SaveChanges(); err != nil {
-		return err
-	}
-
 	// update root pointer;
 	buffer := make([]byte, 8)
 	binary.LittleEndian.PutUint64(buffer, pointer)
 
-	return storage.pageManager.SaveMetaInfo(buffer)
+	return storage.pageManager.WriteMetaInfo(buffer)
 }
 
 func (storage *StorageFile) Get(pointer BNodePointer) *BNode {
@@ -74,4 +71,27 @@ func (storage *StorageFile) Create(node *BNode) BNodePointer {
 
 func (storage *StorageFile) Delete(pointer BNodePointer) {
 	storage.pageManager.DeletePage(pointer)
+}
+
+func (storage *StorageFile) Flush() error {
+	return storage.pageManager.WritePages()
+}
+
+func (storage *StorageFile) Snapshot() SnapshotID {
+	snapshotID := SnapshotID(len(storage.snapshots))
+	snapshot := storage.pageManager.GetState()
+
+	storage.snapshots[snapshotID] = snapshot
+
+	return snapshotID
+}
+
+func (storage *StorageFile) Restore(id SnapshotID) {
+	snapshot, exist := storage.snapshots[id]
+
+	if !exist {
+		panic(fmt.Sprintf("StorageFile: snapshot with ID %d doesn`t exist", id))
+	}
+
+	storage.pageManager.ApplyState(snapshot)
 }

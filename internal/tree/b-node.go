@@ -45,7 +45,7 @@ func (node *BNode) setHeader(nodeType BNodeType, numberOfKeys uint16) {
 
 func (node *BNode) getChildPointer(position BNodeKeyPosition) BNodePointer {
 	if position >= node.getStoredKeysNumber() {
-		panic(fmt.Sprintf("BNode doesn't store child pointer at position %d", position))
+		panic(fmt.Sprintf("BNode: couldn't find child pointer at position %d", position))
 	}
 
 	childPointerAddress := 8*position + HEADER_SIZE
@@ -55,7 +55,7 @@ func (node *BNode) getChildPointer(position BNodeKeyPosition) BNodePointer {
 
 func (node *BNode) setChildPointer(position BNodeKeyPosition, pointer BNodePointer) {
 	if position >= node.getStoredKeysNumber() {
-		panic(fmt.Sprintf("BNode doesn't store child pointer at position %d", position))
+		panic(fmt.Sprintf("BNode: couldn't set child pointer at position %d", position))
 	}
 
 	childPointerAddress := 8*position + HEADER_SIZE
@@ -69,7 +69,7 @@ func (node *BNode) getKey(position BNodeKeyPosition) []byte {
 	}
 
 	if position >= node.getStoredKeysNumber() {
-		panic(fmt.Sprintf("BNode doesn't store key at position %d", position))
+		panic(fmt.Sprintf("BNode: couldn't get key at position %d", position))
 	}
 
 	offset := node.getKeyValueOffset(position)
@@ -81,7 +81,7 @@ func (node *BNode) getKey(position BNodeKeyPosition) []byte {
 
 func (node *BNode) getValue(position BNodeKeyPosition) []byte {
 	if position >= node.getStoredKeysNumber() {
-		panic(fmt.Sprintf("BNode doesn't store value at position %d", position))
+		panic(fmt.Sprintf("BNode: couldn't get value at position %d", position))
 	}
 
 	offset := node.getKeyValueOffset(position)
@@ -96,7 +96,7 @@ func (node *BNode) appendKeyValue(key []byte, value []byte) {
 	position := node.getAvailableKeyPosition()
 
 	if position == node.getStoredKeysNumber() {
-		panic("BNode couldn't append key-value because node is full")
+		panic("BNode: couldn't append key-value because node is full")
 	}
 
 	node.setChildPointer(position, 0)
@@ -116,7 +116,7 @@ func (node *BNode) appendPointer(key []byte, pointer BNodePointer) {
 	position := node.getAvailableKeyPosition()
 
 	if position == node.getStoredKeysNumber() {
-		panic("BNode couldn't append key-value because node is full")
+		panic("BNode: couldn't append key-value because node is full")
 	}
 
 	node.appendKeyValue(key, nil)
@@ -134,7 +134,7 @@ func (node *BNode) size() uint16 {
 func (node *BNode) copy(source *BNode, from BNodeKeyPosition, to BNodeKeyPosition, quantity uint16) {
 
 	if from+quantity > source.getStoredKeysNumber() {
-		panic(fmt.Sprintf("BNode couldn't copy %d values from position %d because source node has only %d keys", quantity, from, source.getStoredKeysNumber()))
+		panic(fmt.Sprintf("BNode: couldn't copy %d values from position %d because source node has only %d keys", quantity, from, source.getStoredKeysNumber()))
 	}
 
 	if to+quantity > node.getStoredKeysNumber() {
@@ -163,11 +163,11 @@ func (node *BNode) copy(source *BNode, from BNodeKeyPosition, to BNodeKeyPositio
 
 func (node *BNode) setKeyValueOffset(position BNodeKeyPosition, keyValueOffset uint16) {
 	if position > node.getStoredKeysNumber() {
-		panic(fmt.Sprintf("BNode doesn't store key-value with index %d", position))
+		panic(fmt.Sprintf("BNode: couldn't set key-value with index %d", position))
 	}
 
 	if position == 0 {
-		panic("BNode doesn't store offset for first key-value because its always 0")
+		panic("BNode: couldn't store offset for first key-value because its always 0")
 	}
 
 	address := HEADER_SIZE + node.getStoredKeysNumber()*8 + (position-1)*2

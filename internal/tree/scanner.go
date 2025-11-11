@@ -85,6 +85,6 @@ func (scanner *Scanner) compareKeys(key []byte, foundKey []byte, compareStrategy
 	case LESS_OR_EQUAL_COMPARISON:
 		return compareResult <= 0
 	default:
-		panic(fmt.Sprintf("Scanner doesn`t support comparison strategy %d", compareStrategy))
+		panic(fmt.Sprintf("Scanner: comparison strategy %d is not supported", compareStrategy))
 	}
 }
