@@ -88,7 +88,7 @@ func (database *Database) getTableSchema(tableName string) *TableSchema {
 	record, err := schemaTable.Get(query)
 
 	if err != nil {
-		panic(fmt.Errorf("Database can`t read schema table %w", err))
+		panic(fmt.Errorf("Database: can`t read schema table %w", err))
 	}
 
 	if record == nil {
@@ -98,7 +98,7 @@ func (database *Database) getTableSchema(tableName string) *TableSchema {
 	tableSchema := &TableSchema{}
 
 	if err := json.Unmarshal([]byte(record.Get("definition").(*StringValue).Value()), tableSchema); err != nil {
-		panic(fmt.Errorf("Database can`t parse scheme %w", err))
+		panic(fmt.Errorf("Database: can`t parse schema %w", err))
 	}
 
 	return tableSchema

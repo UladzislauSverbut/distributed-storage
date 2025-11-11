@@ -19,66 +19,6 @@ type KeyValue struct {
 	storage   tree.Storage
 }
 
-func (kv *KeyValue) Get(request *GetRequest) (*GetResponse, error) {
-	value, err := kv.tree.Get(request.Key)
-
-	return &GetResponse{value}, err
-}
-
-func (kv *KeyValue) Scan(request *ScanRequest) ScanResponse {
-	treeScanner := tree.NewScanner(kv.tree)
-
-	return treeScanner.Seek(request.Key, tree.GREATER_OR_EQUAL_COMPARISON)
-}
-
-func (kv *KeyValue) Set(request *SetRequest) (*SetResponse, error) {
-	oldValue, err := kv.tree.Set(request.Key, request.Value)
-
-	if err != nil {
-		return &SetResponse{}, err
-	}
-
-	if err = kv.attachToParent(); err != nil {
-		return &SetResponse{}, err
-	}
-
-	if oldValue != nil {
-		return &SetResponse{Updated: true, OldValue: oldValue}, nil
-	}
-
-	return &SetResponse{Added: true}, nil
-}
-
-func (kv *KeyValue) Delete(request *DeleteRequest) (*DeleteResponse, error) {
-	oldValue, err := kv.tree.Delete(request.Key)
-
-	if err != nil {
-		return &DeleteResponse{}, err
-	}
-
-	if err = kv.attachToParent(); err != nil {
-		return &DeleteResponse{}, err
-	}
-
-	return &DeleteResponse{OldValue: oldValue}, nil
-}
-
-func (kv *KeyValue) attachToParent() error {
-	if kv.parent == nil {
-		return kv.storage.SaveRoot(kv.tree.Root())
-	}
-
-	subTreeBufferedPointer := make([]byte, 8)
-
-	binary.LittleEndian.PutUint64(subTreeBufferedPointer, kv.tree.Root())
-
-	if _, err := kv.parent.tree.Set(kv.namespace, subTreeBufferedPointer); err != nil {
-		return err
-	}
-
-	return kv.parent.attachToParent()
-}
-
 func NewKeyValue(filePath string) *KeyValue {
 	storage := tree.NewStorageFile(filePath, config.PageSize)
 
@@ -108,4 +48,64 @@ func WithPrefix(keyValue *KeyValue, prefix string) *KeyValue {
 		parent:    keyValue,
 		storage:   keyValue.storage,
 	}
+}
+
+func (kv *KeyValue) Get(request *GetRequest) (*GetResponse, error) {
+	value, err := kv.tree.Get(request.Key)
+
+	return &GetResponse{value}, err
+}
+
+func (kv *KeyValue) Scan(request *ScanRequest) ScanResponse {
+	treeScanner := tree.NewScanner(kv.tree)
+
+	return treeScanner.Seek(request.Key, tree.GREATER_OR_EQUAL_COMPARISON)
+}
+
+func (kv *KeyValue) Set(request *SetRequest) (*SetResponse, error) {
+	oldValue, err := kv.tree.Set(request.Key, request.Value)
+
+	if err != nil {
+		return &SetResponse{}, err
+	}
+
+	if err = kv.updateParent(); err != nil {
+		return &SetResponse{}, err
+	}
+
+	if oldValue != nil {
+		return &SetResponse{Updated: true, OldValue: oldValue}, nil
+	}
+
+	return &SetResponse{Added: true}, nil
+}
+
+func (kv *KeyValue) Delete(request *DeleteRequest) (*DeleteResponse, error) {
+	oldValue, err := kv.tree.Delete(request.Key)
+
+	if err != nil {
+		return &DeleteResponse{}, err
+	}
+
+	if err = kv.updateParent(); err != nil {
+		return &DeleteResponse{}, err
+	}
+
+	return &DeleteResponse{OldValue: oldValue}, nil
+}
+
+func (kv *KeyValue) updateParent() error {
+	if kv.parent == nil {
+		return nil
+	}
+
+	subTreeBufferedPointer := make([]byte, 8)
+
+	binary.LittleEndian.PutUint64(subTreeBufferedPointer, kv.tree.Root())
+
+	if _, err := kv.parent.tree.Set(kv.namespace, subTreeBufferedPointer); err != nil {
+		return err
+	}
+
+	return kv.parent.updateParent()
 }

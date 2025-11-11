@@ -40,7 +40,7 @@ func NewStorageFile(filePath string, pageSize int) *StorageFile {
 		}
 	}
 
-	return &StorageFile{pageManager: pageManager}
+	return &StorageFile{pageManager: pageManager, snapshots: map[SnapshotID]fs.PageManagerState{}}
 }
 
 func (storage *StorageFile) GetRoot() BTreeRootPointer {
