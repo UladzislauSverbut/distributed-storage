@@ -105,6 +105,8 @@ func (database *Database) getTableSchema(tableName string) *TableSchema {
 }
 
 func (database *Database) saveTableSchema(schema *TableSchema) error {
+	transaction := NewTransaction(*database, SCHEMA_TABLE_NAME)
+
 	schemaTable := database.Get(SCHEMA_TABLE_NAME)
 	stringifiedSchema, _ := json.Marshal(schema)
 
@@ -112,7 +114,13 @@ func (database *Database) saveTableSchema(schema *TableSchema) error {
 		Set("name", NewStringValue(schema.Name)).
 		Set("definition", NewStringValue(string(stringifiedSchema)))
 
-	return schemaTable.Insert(query)
+	if err := schemaTable.Insert(query); err != nil {
+		transaction.Abort()
+
+		return fmt.Errorf("Database: can't save schema %w", err)
+	}
+
+	return transaction.Commit()
 }
 
 func (database *Database) validateTableSchema(schema *TableSchema) error {

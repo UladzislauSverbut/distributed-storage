@@ -266,7 +266,7 @@ func (manager *PageManager) saveAllocatedPages() error {
 		return err
 	}
 
-	if err := manager.splitFile(manager.state.pagesCount); err != nil {
+	if err := manager.splitFile(); err != nil {
 		return err
 	}
 
@@ -293,24 +293,22 @@ func (manager *PageManager) syncPagesWithFile() error {
 	return manager.file.pointer.Sync()
 }
 
-func (manager *PageManager) splitFile(desireNumberOfPages int) error {
-	desiredFileMemorySize := desireNumberOfPages * manager.config.pageSize
+func (manager *PageManager) splitFile() error {
+	memorySize := 0
 
-	if manager.file.size >= desiredFileMemorySize {
-		return nil
+	for _, memorySegment := range manager.file.memory {
+		memorySize += len(memorySegment)
 	}
 
-	for desiredFileMemorySize > 0 {
-		chunk, err := mapFileToMemory(manager.file.pointer, int64(manager.file.size), manager.file.size)
+	for memorySize < manager.file.size {
+		chunk, err := mapFileToMemory(manager.file.pointer, int64(memorySize), memorySize)
 
 		if err != nil {
 			return fmt.Errorf("FileSystem storage can't add chunks: %w", err)
 		}
 
-		manager.file.size += len(chunk)
 		manager.file.memory = append(manager.file.memory, chunk)
-
-		desiredFileMemorySize -= len(chunk)
+		memorySize += len(chunk)
 	}
 
 	return nil
