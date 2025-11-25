@@ -75,8 +75,11 @@ func (table *Table) GetAll() []*Object {
 
 	records := make([]*Object, 0)
 
-	for _, value := cursor.Current(); value != nil; _, value = cursor.Next() {
-		records = append(records, table.decodePayload(value))
+	for index, value := cursor.Current(); value != nil; index, value = cursor.Next() {
+
+		if table.matchPrimaryIndex(index) {
+			records = append(records, table.decodePayload(value))
+		}
 	}
 
 	return records
@@ -307,7 +310,7 @@ func (table *Table) encodeSecondaryIndex(primaryIndexValues []Value, secondaryIn
 }
 
 func (table *Table) decodeSecondaryIndex(encodedIndex []byte) (primaryIndexValues []Value, secondaryIndexValues []Value, secondaryIndexNumber int) {
-	if len(encodedIndex) < INDEX_ID_SIZE {
+	if table.matchPrimaryIndex(encodedIndex) {
 		return
 	}
 
@@ -333,6 +336,16 @@ func (table *Table) decodeSecondaryIndex(encodedIndex []byte) (primaryIndexValue
 	}
 
 	return
+}
+
+func (table *Table) matchPrimaryIndex(encodedIndex []byte) bool {
+	if len(encodedIndex) < INDEX_ID_SIZE {
+		return false
+	}
+
+	indexId := binary.LittleEndian.Uint32(encodedIndex[0:INDEX_ID_SIZE])
+
+	return indexId == uint32(PRIMARY_INDEX_ID)
 }
 
 func (table *Table) matchIndexes(encodedIndex []byte, partialEncodedIndex []byte) bool {
