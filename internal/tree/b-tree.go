@@ -7,6 +7,7 @@ import (
 )
 
 type BTreeRootPointer = BNodePointer
+type BTreeVersion = uint64
 
 type BTreeConfig struct {
 	PageSize     int
