@@ -1,12 +1,12 @@
-package fs
+package pager
 
 import (
 	"bytes"
+	"distributed-storage/internal/storage"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
-	"os"
 )
 
 const NULL_PAGE = PagePointer(0)
@@ -15,16 +15,10 @@ const META_INFO_HEADER_SIZE = 40 // size of meta info  in file bytes
 
 type PagePointer = uint64
 
-type File struct {
-	pointer *os.File
-	size    int
-	memory  [][]byte
-}
-
 type PageManager struct {
-	file   File
-	config PageManagerConfig
-	state  PageManagerState
+	storage storage.Storage
+	config  PageManagerConfig
+	state   PageManagerState
 }
 
 type PageManagerConfig struct {
@@ -40,54 +34,37 @@ type PageManagerState struct {
 	pageUpdates         map[PagePointer][]byte // map of page updates that will be synced with file
 }
 
-const STORAGE_SIGNATURE = "FILE_STORAGE_SIG"
+const SIGNATURE = "PAGE_MANAGER_SIG"
 
 /*
-	We book one file system storage page for storing information about number of used and freed pages
+	We book one page for storing information about number of used and freed pages
 	This page is called as "master"
 
 	Mater Page Format
 
  	| signature | number of stored pages | page pool pointer | user meta info |
-	|    16B    |            8B          |         8B        |     ...rest    |
+	|    16B    |           8B           |         8B        |     ...rest    |
 */
 
-func NewPageManager(file *os.File, pageSize int) (*PageManager, error) {
+func NewPageManager(storage storage.Storage, pageSize int) (*PageManager, error) {
 	firstInitialization := false
+	storageSize := storage.Size()
 
-	fileStat, err := file.Stat()
-
-	if err != nil {
-		return nil, err
-	}
-
-	fileSize := int(fileStat.Size())
-
-	if fileSize > 0 && fileSize%pageSize != 0 {
+	if storageSize > 0 && storageSize%pageSize != 0 {
 		return nil, errors.New("PageManager: support only files with size of multiple pages")
 	}
 
-	if fileSize == 0 {
+	if storageSize == 0 {
 		firstInitialization = true
-		fileSize = pageSize * 10
+		storageSize = pageSize * 10
 
-		if err = increaseFileSize(file, int64(fileSize)); err != nil {
+		if err := storage.IncreaseSize(storageSize); err != nil {
 			return nil, err
 		}
 	}
 
-	virtualMemory, err := mapFileToMemory(file, 0, fileSize)
-
-	if err != nil {
-		return nil, err
-	}
-
 	manager := &PageManager{
-		file: File{
-			pointer: file,
-			size:    fileSize,
-			memory:  [][]byte{virtualMemory},
-		},
+		storage: storage,
 		config: PageManagerConfig{
 			pageSize: pageSize,
 		},
@@ -105,7 +82,7 @@ func NewPageManager(file *os.File, pageSize int) (*PageManager, error) {
 		manager.state.pagesCount = 1 // reserve master page
 		manager.state.pageBuffer = NewPageBuffer(manager.allocateVirtualPage(), manager)
 	} else {
-		if err = manager.parseMasterPage(); err != nil {
+		if err := manager.parseMasterPage(); err != nil {
 			return nil, err
 		}
 	}
@@ -127,7 +104,7 @@ func (manager *PageManager) WriteMetaInfo(meta []byte) error {
 
 	copy(masterPage[META_INFO_HEADER_SIZE:], meta)
 
-	if _, err := manager.file.pointer.WriteAt(masterPage, 0); err != nil {
+	if err := manager.storage.FlushMemoryBlock(masterPage, 0); err != nil {
 		return err
 	}
 
@@ -147,7 +124,7 @@ func (manager *PageManager) GetPage(pointer PagePointer) []byte {
 		return page
 	}
 
-	return manager.getFilePage(pointer)
+	return manager.storage.MemoryBlock(manager.config.pageSize, int(pointer)*manager.config.pageSize)
 }
 
 func (manager *PageManager) CreatePage(data []byte) PagePointer {
@@ -172,32 +149,14 @@ func (manager *PageManager) GetPagesCount() int {
 }
 
 func (manager *PageManager) WritePages() error {
-	if err := manager.saveReleasedPages(); err != nil {
-		return err
-	}
-
 	if err := manager.saveAllocatedPages(); err != nil {
 		return err
 	}
 
-	return manager.syncPagesWithFile()
-}
+	manager.saveReleasedPages()
+	manager.saveMasterPage()
 
-func (manager *PageManager) getFilePage(pointer PagePointer) []byte {
-	firstPagePointer := PagePointer(0)
-
-	for _, memorySegment := range manager.file.memory {
-		lastPagePointer := firstPagePointer + uint64(len(memorySegment)/manager.config.pageSize)
-
-		if lastPagePointer > pointer {
-			offset := int(pointer-firstPagePointer) * manager.config.pageSize
-			return memorySegment[offset : offset+manager.config.pageSize]
-		}
-
-		firstPagePointer = lastPagePointer
-	}
-
-	panic(fmt.Sprintf("PageManager: cant find unstored page %d", pointer))
+	return manager.storage.Flush()
 }
 
 func (manager *PageManager) reuseFilePage() PagePointer {
@@ -231,7 +190,7 @@ func (manager *PageManager) parseMasterPage() error {
 	pagesCount := binary.LittleEndian.Uint64((masterPage[16:]))
 	pageBufferHead := binary.LittleEndian.Uint64((masterPage[24:]))
 
-	if !bytes.Equal([]byte(STORAGE_SIGNATURE), fileSignature) {
+	if !bytes.Equal([]byte(SIGNATURE), fileSignature) {
 		return errors.New("PageManager: file is corrupted")
 	}
 
@@ -241,7 +200,7 @@ func (manager *PageManager) parseMasterPage() error {
 	return nil
 }
 
-func (manager *PageManager) saveReleasedPages() error {
+func (manager *PageManager) saveReleasedPages() {
 	releasedPages := make([]PagePointer, 0, manager.state.releasedPagesCount)
 
 	for pointer, page := range manager.state.pageUpdates {
@@ -255,24 +214,18 @@ func (manager *PageManager) saveReleasedPages() error {
 
 	manager.state.releasedPagesCount = 0
 	manager.state.reusedPagesCount = 0
-
-	return nil
 }
 
 func (manager *PageManager) saveAllocatedPages() error {
 	manager.state.pagesCount += manager.state.allocatedPagesCount
 
-	if err := manager.extendFile(manager.state.pagesCount); err != nil {
-		return err
-	}
-
-	if err := manager.splitFile(); err != nil {
+	if err := manager.extendStorage(manager.state.pagesCount); err != nil {
 		return err
 	}
 
 	for pointer, page := range manager.state.pageUpdates {
 		if page != nil {
-			copy(manager.getFilePage(uint64(pointer)), page)
+			manager.storage.UpdateMemoryBlock(page, int(pointer)*manager.config.pageSize)
 		}
 	}
 
@@ -282,40 +235,19 @@ func (manager *PageManager) saveAllocatedPages() error {
 	return nil
 }
 
-func (manager *PageManager) syncPagesWithFile() error {
+func (manager *PageManager) saveMasterPage() error {
 	masterPage := manager.getMasterPage()
 
-	copy(masterPage[0:16], []byte(STORAGE_SIGNATURE))
+	copy(masterPage[0:16], []byte(SIGNATURE))
 
 	binary.LittleEndian.PutUint64(masterPage[16:], uint64(manager.state.pagesCount))
 	binary.LittleEndian.PutUint64(masterPage[24:], uint64(manager.state.pageBuffer.head))
 
-	return manager.file.pointer.Sync()
+	return manager.storage.UpdateMemoryBlock(masterPage, 0)
 }
 
-func (manager *PageManager) splitFile() error {
-	memorySize := 0
-
-	for _, memorySegment := range manager.file.memory {
-		memorySize += len(memorySegment)
-	}
-
-	for memorySize < manager.file.size {
-		chunk, err := mapFileToMemory(manager.file.pointer, int64(memorySize), memorySize)
-
-		if err != nil {
-			return fmt.Errorf("FileSystem storage can't add chunks: %w", err)
-		}
-
-		manager.file.memory = append(manager.file.memory, chunk)
-		memorySize += len(chunk)
-	}
-
-	return nil
-}
-
-func (manager *PageManager) extendFile(desireNumberOfPages int) error {
-	filePages := manager.file.size / manager.config.pageSize
+func (manager *PageManager) extendStorage(desireNumberOfPages int) error {
+	filePages := manager.storage.Size() / manager.config.pageSize
 
 	if filePages >= desireNumberOfPages {
 		return nil
@@ -328,11 +260,9 @@ func (manager *PageManager) extendFile(desireNumberOfPages int) error {
 
 	fileSize := filePages * manager.config.pageSize
 
-	if err := increaseFileSize(manager.file.pointer, int64(fileSize)); err != nil {
+	if err := manager.storage.IncreaseSize(fileSize); err != nil {
 		return err
 	}
-
-	manager.file.size = fileSize
 
 	return nil
 }

@@ -1,4 +1,4 @@
-package fs
+package pager
 
 import (
 	"encoding/binary"
