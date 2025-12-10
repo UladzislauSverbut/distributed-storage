@@ -15,12 +15,12 @@ type BTreeConfig struct {
 	MaxValueSize int
 }
 type BTree struct {
-	storage Storage
+	storage *Storage
 	root    BNodePointer
 	config  BTreeConfig
 }
 
-func NewBTree(root BTreeRootPointer, storage Storage, config BTreeConfig) *BTree {
+func NewBTree(root BTreeRootPointer, storage *Storage, config BTreeConfig) *BTree {
 	return &BTree{
 		root:    root,
 		storage: storage,

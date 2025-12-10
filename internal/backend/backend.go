@@ -1,10 +1,10 @@
-package storage
+package backend
 
-type Storage interface {
+type Backend interface {
 	Flush() error
 	Size() int
 	IncreaseSize(size int) error
 	MemoryBlock(size int, offset int) []byte
-	UpdateMemoryBlock(data []byte, offset int) error
+	UpdateMemoryBlock(data []byte, offset int)
 	FlushMemoryBlock(data []byte, offset int) error
 }

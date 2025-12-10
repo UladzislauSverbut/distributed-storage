@@ -1,6 +1,7 @@
 package kv
 
 import (
+	"distributed-storage/internal/backend"
 	"distributed-storage/internal/tree"
 	"encoding/binary"
 	"fmt"
@@ -15,12 +16,18 @@ var config = tree.BTreeConfig{
 type KeyValue struct {
 	tree      *tree.BTree
 	parent    *KeyValue
+	storage   *tree.Storage
 	namespace []byte
-	storage   tree.Storage
 }
 
 func NewKeyValue(filePath string) *KeyValue {
-	storage := tree.NewStorageFile(filePath, config.PageSize)
+	backend, err := backend.NewFileBackend(filePath)
+
+	if err != nil {
+		panic(fmt.Errorf("Failed to create file backend: %w", err))
+	}
+
+	storage := tree.NewStorage(backend, config.PageSize)
 
 	return &KeyValue{
 		tree:    tree.NewBTree(storage.GetRoot(), storage, config),
