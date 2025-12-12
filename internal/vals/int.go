@@ -1,4 +1,4 @@
-package db
+package vals
 
 import (
 	"encoding/binary"
@@ -17,7 +17,7 @@ func (value *IntValue[T]) Value() T {
 }
 
 func (value *IntValue[T]) Type() ValueType {
-	return VALUE_TYPE_INT64
+	return TYPE_INT64
 }
 
 func (value *IntValue[T]) Size() int {
@@ -28,7 +28,7 @@ func (value *IntValue[T]) Empty() bool {
 	return false
 }
 
-func (value *IntValue[T]) serialize() []byte {
+func (value *IntValue[T]) Serialize() []byte {
 	unsignedInt := uint64(value.num) + (1 << 63)
 	serializedInt := make([]byte, 8)
 
@@ -37,12 +37,12 @@ func (value *IntValue[T]) serialize() []byte {
 	return serializedInt
 }
 
-func (value *IntValue[T]) parse(serializedInt []byte) {
+func (value *IntValue[T]) Parse(serializedInt []byte) {
 	signedInt := uint64(binary.LittleEndian.Uint64(serializedInt)) + (1 << 63)
 
 	value.num = T(signedInt)
 }
 
-func NewIntValue[T SupportedInts](value T) *IntValue[T] {
+func NewInt[T SupportedInts](value T) *IntValue[T] {
 	return &IntValue[T]{value}
 }

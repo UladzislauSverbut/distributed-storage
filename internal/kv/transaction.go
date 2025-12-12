@@ -1,13 +1,12 @@
 package kv
 
 import (
-	"distributed-storage/internal/tree"
 	"fmt"
 )
 
 type Transaction struct {
 	kv         *KeyValue
-	snapshotID tree.SnapshotID
+	snapshotID SnapshotID
 }
 
 func NewTransaction(kv *KeyValue) *Transaction {

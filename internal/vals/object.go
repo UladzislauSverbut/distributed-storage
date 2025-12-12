@@ -1,4 +1,4 @@
-package db
+package vals
 
 type Object struct {
 	values map[string]Value
@@ -16,7 +16,7 @@ func (object *Object) Get(field string) Value {
 	if ok {
 		return value
 	} else {
-		return NewNullValue()
+		return NewNull()
 	}
 }
 

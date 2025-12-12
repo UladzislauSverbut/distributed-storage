@@ -13,10 +13,10 @@ const (
 )
 
 type Scanner struct {
-	tree *BTree
+	tree *Tree
 }
 
-func NewScanner(tree *BTree) *Scanner {
+func NewScanner(tree *Tree) *Scanner {
 	return &Scanner{tree: tree}
 }
 
@@ -62,7 +62,7 @@ func (scanner *Scanner) seekLessOrEqual(key []byte) *Cursor {
 
 		cursor.path = append(cursor.path, &NodePosition{parent, lessOrEqualNodePointer})
 
-		if parent.getType() == BNODE_PARENT {
+		if parent.getType() == NODE_PARENT {
 			parentPointer = parent.getChildPointer(lessOrEqualNodePointer)
 		} else {
 			parentPointer = NULL_NODE

@@ -6,31 +6,31 @@ import (
 	"log"
 )
 
-type BTreeRootPointer = BNodePointer
-type BTreeVersion = uint64
+type TreeRootPointer = NodePointer
+type TreeVersion = uint64
 
-type BTreeConfig struct {
+type TreeConfig struct {
 	PageSize     int
 	MaxKeySize   int
 	MaxValueSize int
 }
-type BTree struct {
-	storage *Storage
-	root    BNodePointer
-	config  BTreeConfig
+type Tree struct {
+	storage *TreeStorage
+	root    NodePointer
+	config  TreeConfig
 }
 
-func NewBTree(root BTreeRootPointer, storage *Storage, config BTreeConfig) *BTree {
-	return &BTree{
+func NewTree(root TreeRootPointer, storage *TreeStorage, config TreeConfig) *Tree {
+	return &Tree{
 		root:    root,
 		storage: storage,
 		config:  config,
 	}
 }
 
-func (tree *BTree) Get(key []byte) ([]byte, error) {
+func (tree *Tree) Get(key []byte) ([]byte, error) {
 	if len(key) > tree.config.MaxKeySize {
-		return nil, fmt.Errorf("BTree supports only keys within the size %d", tree.config.MaxKeySize)
+		return nil, fmt.Errorf("Tree: supports only keys within the size %d", tree.config.MaxKeySize)
 	}
 
 	if tree.root == NULL_NODE {
@@ -40,18 +40,18 @@ func (tree *BTree) Get(key []byte) ([]byte, error) {
 	return tree.getKeyValue(tree.storage.Get(tree.root), key), nil
 }
 
-func (tree *BTree) Set(key []byte, value []byte) ([]byte, error) {
+func (tree *Tree) Set(key []byte, value []byte) ([]byte, error) {
 	if len(value) > tree.config.MaxValueSize {
-		return nil, fmt.Errorf("BTree supports only values within the size %d", tree.config.MaxValueSize)
+		return nil, fmt.Errorf("Tree: supports only values within the size %d", tree.config.MaxValueSize)
 	}
 
 	if len(key) > tree.config.MaxKeySize {
-		return nil, fmt.Errorf("BTree supports only keys within the size %d", tree.config.MaxKeySize)
+		return nil, fmt.Errorf("Tree: supports only keys within the size %d", tree.config.MaxKeySize)
 	}
 
 	if tree.root == NULL_NODE {
-		rootNode := &BNode{data: make([]byte, tree.config.PageSize)}
-		rootNode.setHeader(BNODE_LEAF, 1)
+		rootNode := &Node{data: make([]byte, tree.config.PageSize)}
+		rootNode.setHeader(NODE_LEAF, 1)
 		rootNode.appendKeyValue(key, value)
 
 		tree.root = tree.storage.Create(rootNode)
@@ -65,11 +65,11 @@ func (tree *BTree) Set(key []byte, value []byte) ([]byte, error) {
 	if int(rootNode.size()) > tree.config.PageSize {
 		splitNodes := tree.splitNode(rootNode)
 
-		rootNode = &BNode{data: make([]byte, tree.config.PageSize)}
-		rootNode.setHeader(BNODE_PARENT, uint16(len(splitNodes)))
+		rootNode = &Node{data: make([]byte, tree.config.PageSize)}
+		rootNode.setHeader(NODE_PARENT, uint16(len(splitNodes)))
 
 		for _, child := range splitNodes {
-			firstStoredKey := child.getKey(BNodeKeyPosition(0))
+			firstStoredKey := child.getKey(NodeKeyPosition(0))
 			rootNode.appendPointer(firstStoredKey, tree.storage.Create(child))
 		}
 	}
@@ -80,9 +80,9 @@ func (tree *BTree) Set(key []byte, value []byte) ([]byte, error) {
 	return oldValue, nil
 }
 
-func (tree *BTree) Delete(key []byte) ([]byte, error) {
+func (tree *Tree) Delete(key []byte) ([]byte, error) {
 	if len(key) > tree.config.MaxKeySize {
-		return nil, fmt.Errorf("BTree supports only keys within the size %d", tree.config.MaxKeySize)
+		return nil, fmt.Errorf("Tree supports only keys within the size %d", tree.config.MaxKeySize)
 	}
 
 	if tree.root == NULL_NODE {
@@ -98,8 +98,8 @@ func (tree *BTree) Delete(key []byte) ([]byte, error) {
 
 	tree.storage.Delete(tree.root)
 
-	if updatedRootNode.getType() == BNODE_PARENT && updatedRootNode.getStoredKeysNumber() == 1 {
-		firstChild := updatedRootNode.getChildPointer(BNodeKeyPosition(0))
+	if updatedRootNode.getType() == NODE_PARENT && updatedRootNode.getStoredKeysNumber() == 1 {
+		firstChild := updatedRootNode.getChildPointer(NodeKeyPosition(0))
 		tree.root = firstChild
 	} else {
 		tree.root = tree.storage.Create(updatedRootNode)
@@ -108,14 +108,14 @@ func (tree *BTree) Delete(key []byte) ([]byte, error) {
 	return oldValue, nil
 }
 
-func (tree *BTree) Root() BTreeRootPointer {
+func (tree *Tree) Root() TreeRootPointer {
 	return tree.root
 }
 
-func (tree *BTree) getKeyValue(node *BNode, key []byte) []byte {
+func (tree *Tree) getKeyValue(node *Node, key []byte) []byte {
 	keyPosition := tree.getLessOrEqualKeyPosition(node, key)
 	switch node.getType() {
-	case BNODE_LEAF:
+	case NODE_LEAF:
 		{
 			storedKey := node.getKey(keyPosition)
 
@@ -125,7 +125,7 @@ func (tree *BTree) getKeyValue(node *BNode, key []byte) []byte {
 				return nil
 			}
 		}
-	case BNODE_PARENT:
+	case NODE_PARENT:
 		{
 			return tree.getKeyValue(tree.storage.Get(node.getChildPointer(keyPosition)), key)
 		}
@@ -137,10 +137,10 @@ func (tree *BTree) getKeyValue(node *BNode, key []byte) []byte {
 	}
 }
 
-func (tree *BTree) setKeyValue(node *BNode, key []byte, value []byte) (*BNode, []byte) {
+func (tree *Tree) setKeyValue(node *Node, key []byte, value []byte) (*Node, []byte) {
 	keyPosition := tree.getLessOrEqualKeyPosition(node, key)
 	switch node.getType() {
-	case BNODE_LEAF:
+	case NODE_LEAF:
 		{
 			storedKeyAtSamePosition := node.getKey(keyPosition)
 
@@ -150,7 +150,7 @@ func (tree *BTree) setKeyValue(node *BNode, key []byte, value []byte) (*BNode, [
 				return tree.insertLeafKeyValue(node, keyPosition, key, value), nil
 			}
 		}
-	case BNODE_PARENT:
+	case NODE_PARENT:
 		{
 			return tree.setParentKeyValue(node, keyPosition, key, value)
 		}
@@ -162,13 +162,13 @@ func (tree *BTree) setKeyValue(node *BNode, key []byte, value []byte) (*BNode, [
 	}
 }
 
-func (tree *BTree) deleteKeyValue(node *BNode, key []byte) (*BNode, []byte) {
+func (tree *Tree) deleteKeyValue(node *Node, key []byte) (*Node, []byte) {
 	switch node.getType() {
-	case BNODE_LEAF:
+	case NODE_LEAF:
 		{
 			return tree.deleteLeafKeyValue(node, key)
 		}
-	case BNODE_PARENT:
+	case NODE_PARENT:
 		{
 			return tree.deleteParentKeyValue(node, key)
 		}
@@ -180,9 +180,9 @@ func (tree *BTree) deleteKeyValue(node *BNode, key []byte) (*BNode, []byte) {
 	}
 }
 
-func (tree *BTree) updateLeafKeyValue(node *BNode, position BNodeKeyPosition, key []byte, value []byte) *BNode {
-	newNode := &BNode{data: make([]byte, 2*tree.config.PageSize)}
-	newNode.setHeader(BNODE_LEAF, node.getStoredKeysNumber())
+func (tree *Tree) updateLeafKeyValue(node *Node, position NodeKeyPosition, key []byte, value []byte) *Node {
+	newNode := &Node{data: make([]byte, 2*tree.config.PageSize)}
+	newNode.setHeader(NODE_LEAF, node.getStoredKeysNumber())
 
 	newNode.copy(node, 0, 0, position)
 	newNode.appendKeyValue(key, value)
@@ -191,9 +191,9 @@ func (tree *BTree) updateLeafKeyValue(node *BNode, position BNodeKeyPosition, ke
 	return newNode
 }
 
-func (tree *BTree) insertLeafKeyValue(node *BNode, position BNodeKeyPosition, key []byte, value []byte) *BNode {
-	newNode := &BNode{data: make([]byte, 2*tree.config.PageSize)}
-	newNode.setHeader(BNODE_LEAF, node.getStoredKeysNumber()+1)
+func (tree *Tree) insertLeafKeyValue(node *Node, position NodeKeyPosition, key []byte, value []byte) *Node {
+	newNode := &Node{data: make([]byte, 2*tree.config.PageSize)}
+	newNode.setHeader(NODE_LEAF, node.getStoredKeysNumber()+1)
 
 	if node.getStoredKeysNumber() > 0 {
 		newNode.copy(node, 0, 0, position+1)
@@ -206,7 +206,7 @@ func (tree *BTree) insertLeafKeyValue(node *BNode, position BNodeKeyPosition, ke
 	return newNode
 }
 
-func (tree *BTree) deleteLeafKeyValue(node *BNode, key []byte) (*BNode, []byte) {
+func (tree *Tree) deleteLeafKeyValue(node *Node, key []byte) (*Node, []byte) {
 	position := tree.getLessOrEqualKeyPosition(node, key)
 	storedKey := node.getKey(position)
 
@@ -214,8 +214,8 @@ func (tree *BTree) deleteLeafKeyValue(node *BNode, key []byte) (*BNode, []byte) 
 		return node, nil
 	}
 
-	newNode := &BNode{data: make([]byte, tree.config.PageSize)}
-	newNode.setHeader(BNODE_LEAF, node.getStoredKeysNumber()-1)
+	newNode := &Node{data: make([]byte, tree.config.PageSize)}
+	newNode.setHeader(NODE_LEAF, node.getStoredKeysNumber()-1)
 
 	newNode.copy(node, 0, 0, position)
 	newNode.copy(node, position+1, position, node.getStoredKeysNumber()-(position+1))
@@ -223,24 +223,24 @@ func (tree *BTree) deleteLeafKeyValue(node *BNode, key []byte) (*BNode, []byte) 
 	return newNode, node.getValue(position)
 }
 
-func (tree *BTree) setParentKeyValue(parent *BNode, position BNodeKeyPosition, key []byte, value []byte) (*BNode, []byte) {
+func (tree *Tree) setParentKeyValue(parent *Node, position NodeKeyPosition, key []byte, value []byte) (*Node, []byte) {
 	childPointer := parent.getChildPointer(position)
 	updatedChild, oldValue := tree.setKeyValue(tree.storage.Get(childPointer), key, value)
 
 	tree.storage.Delete(childPointer)
 
-	var newParentChildren []*BNode
+	var newParentChildren []*Node
 
 	if int(updatedChild.size()) > tree.config.PageSize {
 		newParentChildren = tree.splitNode(updatedChild)
 	} else {
-		newParentChildren = []*BNode{updatedChild}
+		newParentChildren = []*Node{updatedChild}
 	}
 
 	return tree.replaceParentChildren(parent, newParentChildren, position, 1), oldValue
 }
 
-func (tree *BTree) deleteParentKeyValue(node *BNode, key []byte) (*BNode, []byte) {
+func (tree *Tree) deleteParentKeyValue(node *Node, key []byte) (*Node, []byte) {
 	keyPosition := tree.getLessOrEqualKeyPosition(node, key)
 	childPointer := node.getChildPointer(keyPosition)
 	child := tree.storage.Get(childPointer)
@@ -257,14 +257,14 @@ func (tree *BTree) deleteParentKeyValue(node *BNode, key []byte) (*BNode, []byte
 	return tree.mergeParentChildren(node, updatedChild, keyPosition), oldValue
 }
 
-func (tree *BTree) replaceParentChildren(parent *BNode, children []*BNode, position BNodeKeyPosition, quantity uint16) *BNode {
-	newNode := &BNode{data: make([]byte, 2*tree.config.PageSize)}
+func (tree *Tree) replaceParentChildren(parent *Node, children []*Node, position NodeKeyPosition, quantity uint16) *Node {
+	newNode := &Node{data: make([]byte, 2*tree.config.PageSize)}
 
-	newNode.setHeader(BNODE_PARENT, parent.getStoredKeysNumber()-quantity+uint16(len(children)))
+	newNode.setHeader(NODE_PARENT, parent.getStoredKeysNumber()-quantity+uint16(len(children)))
 	newNode.copy(parent, 0, 0, position)
 
 	for _, child := range children {
-		firstChildStoredKey := child.getKey(BNodeKeyPosition(0))
+		firstChildStoredKey := child.getKey(NodeKeyPosition(0))
 		newNode.appendPointer(firstChildStoredKey, tree.storage.Create(child))
 	}
 
@@ -273,7 +273,7 @@ func (tree *BTree) replaceParentChildren(parent *BNode, children []*BNode, posit
 	return newNode
 }
 
-func (tree *BTree) mergeParentChildren(node *BNode, newChild *BNode, position BNodeKeyPosition) *BNode {
+func (tree *Tree) mergeParentChildren(node *Node, newChild *Node, position NodeKeyPosition) *Node {
 	defer tree.storage.Delete(node.getChildPointer(position))
 
 	if int(newChild.size()) < tree.config.PageSize/4 {
@@ -282,7 +282,7 @@ func (tree *BTree) mergeParentChildren(node *BNode, newChild *BNode, position BN
 			leftChild := tree.storage.Get(leftChildPointer)
 
 			if int(leftChild.size()+newChild.size()) < tree.config.PageSize-HEADER_SIZE {
-				updatedParent := tree.replaceParentChildren(node, []*BNode{tree.mergeNodes(leftChild, newChild)}, position-1, 2)
+				updatedParent := tree.replaceParentChildren(node, []*Node{tree.mergeNodes(leftChild, newChild)}, position-1, 2)
 
 				tree.storage.Delete(leftChildPointer)
 
@@ -295,7 +295,7 @@ func (tree *BTree) mergeParentChildren(node *BNode, newChild *BNode, position BN
 			rightChild := tree.storage.Get(rightChildPointer)
 
 			if int(rightChild.size()+newChild.size()) < tree.config.PageSize-HEADER_SIZE {
-				updatedParent := tree.replaceParentChildren(node, []*BNode{tree.mergeNodes(newChild, rightChild)}, position, 2)
+				updatedParent := tree.replaceParentChildren(node, []*Node{tree.mergeNodes(newChild, rightChild)}, position, 2)
 
 				tree.storage.Delete(rightChildPointer)
 
@@ -303,22 +303,22 @@ func (tree *BTree) mergeParentChildren(node *BNode, newChild *BNode, position BN
 			}
 		}
 	}
-	return tree.replaceParentChildren(node, []*BNode{newChild}, position, 1)
+	return tree.replaceParentChildren(node, []*Node{newChild}, position, 1)
 }
 
-func (tree *BTree) deleteParentChild(parent *BNode, position BNodeKeyPosition) *BNode {
-	newNode := &BNode{data: make([]byte, tree.config.PageSize)}
+func (tree *Tree) deleteParentChild(parent *Node, position NodeKeyPosition) *Node {
+	newNode := &Node{data: make([]byte, tree.config.PageSize)}
 
 	tree.storage.Delete(parent.getChildPointer(position))
 
-	newNode.setHeader(BNODE_PARENT, parent.getStoredKeysNumber()-1)
+	newNode.setHeader(NODE_PARENT, parent.getStoredKeysNumber()-1)
 	newNode.copy(parent, 0, 0, position)
 	newNode.copy(parent, position+1, position, parent.getStoredKeysNumber()-(position+1))
 
 	return newNode
 }
 
-func (tree *BTree) splitNode(node *BNode) []*BNode {
+func (tree *Tree) splitNode(node *Node) []*Node {
 	storedKeysNumber := node.getStoredKeysNumber()
 	splitChildPosition := storedKeysNumber - 1
 
@@ -326,8 +326,8 @@ func (tree *BTree) splitNode(node *BNode) []*BNode {
 		splitChildPosition--
 	}
 
-	firstNode := &BNode{data: make([]byte, tree.config.PageSize)}
-	secondNode := &BNode{data: make([]byte, tree.config.PageSize)}
+	firstNode := &Node{data: make([]byte, tree.config.PageSize)}
+	secondNode := &Node{data: make([]byte, tree.config.PageSize)}
 
 	firstNode.setHeader(node.getType(), splitChildPosition)
 	secondNode.setHeader(node.getType(), storedKeysNumber-splitChildPosition)
@@ -335,11 +335,11 @@ func (tree *BTree) splitNode(node *BNode) []*BNode {
 	firstNode.copy(node, 0, 0, splitChildPosition)
 	secondNode.copy(node, splitChildPosition, 0, storedKeysNumber-splitChildPosition)
 
-	return []*BNode{firstNode, secondNode}
+	return []*Node{firstNode, secondNode}
 }
 
-func (tree *BTree) mergeNodes(first *BNode, second *BNode) *BNode {
-	mergedNode := &BNode{data: make([]byte, tree.config.PageSize)}
+func (tree *Tree) mergeNodes(first *Node, second *Node) *Node {
+	mergedNode := &Node{data: make([]byte, tree.config.PageSize)}
 
 	mergedNode.setHeader(first.getType(), first.getStoredKeysNumber()+second.getStoredKeysNumber())
 
@@ -349,14 +349,14 @@ func (tree *BTree) mergeNodes(first *BNode, second *BNode) *BNode {
 	return mergedNode
 }
 
-func (tree *BTree) getLessOrEqualKeyPosition(node *BNode, key []byte) BNodeKeyPosition {
+func (tree *Tree) getLessOrEqualKeyPosition(node *Node, key []byte) NodeKeyPosition {
 	storedKeysNumber := node.getStoredKeysNumber()
 	// we find the position of last key that is less or equal than passed key
 	// by default sequence number is 0 because we visited this node from the parent that contains the same key
 	// thus first stored key is always less or equal to passed
-	position := BNodeKeyPosition(0)
+	position := NodeKeyPosition(0)
 
-	for keyPosition := BNodeKeyPosition(1); keyPosition < storedKeysNumber; keyPosition++ {
+	for keyPosition := NodeKeyPosition(1); keyPosition < storedKeysNumber; keyPosition++ {
 		storedKey := node.getKey(keyPosition)
 
 		if bytes.Compare(key, storedKey) >= 0 {

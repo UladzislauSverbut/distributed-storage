@@ -1,12 +1,12 @@
 package tree
 
 type NodePosition struct {
-	parent   *BNode
-	position BNodeKeyPosition
+	parent   *Node
+	position NodeKeyPosition
 }
 
 type Cursor struct {
-	tree *BTree
+	tree *Tree
 	path []*NodePosition
 }
 
@@ -72,7 +72,7 @@ func (cursor *Cursor) HasPrev() bool {
 	return false
 }
 
-func (cursor *Cursor) getCurrentParent() (*BNode, BNodeKeyPosition) {
+func (cursor *Cursor) getCurrentParent() (*Node, NodeKeyPosition) {
 	path := cursor.path[len(cursor.path)-1]
 
 	return path.parent, path.position
@@ -87,9 +87,9 @@ func (cursor *Cursor) moveToRightSiblingParent() {
 
 	_, position = cursor.moveToRightSiblingNode()
 
-	for parent.getType() == BNODE_PARENT {
+	for parent.getType() == NODE_PARENT {
 		parent = cursor.tree.storage.Get(parent.getChildPointer(position))
-		position = BNodeKeyPosition(0)
+		position = NodeKeyPosition(0)
 
 		cursor.path = append(cursor.path, &NodePosition{
 			parent:   parent,
@@ -108,7 +108,7 @@ func (cursor *Cursor) moveToLeftSiblingParent() {
 
 	_, position = cursor.moveToLeftSiblingNode()
 
-	for parent.getType() == BNODE_PARENT {
+	for parent.getType() == NODE_PARENT {
 		parent = cursor.tree.storage.Get(parent.getChildPointer(position))
 		position = parent.getStoredKeysNumber() - 1
 
@@ -119,19 +119,19 @@ func (cursor *Cursor) moveToLeftSiblingParent() {
 	}
 }
 
-func (cursor *Cursor) moveToRightSiblingNode() (*BNode, BNodeKeyPosition) {
+func (cursor *Cursor) moveToRightSiblingNode() (*Node, NodeKeyPosition) {
 	cursor.path[len(cursor.path)-1].position++
 
 	return cursor.getCurrentParent()
 }
 
-func (cursor *Cursor) moveToLeftSiblingNode() (*BNode, BNodeKeyPosition) {
+func (cursor *Cursor) moveToLeftSiblingNode() (*Node, NodeKeyPosition) {
 	cursor.path[len(cursor.path)-1].position--
 
 	return cursor.getCurrentParent()
 }
 
-func (cursor *Cursor) moveToPreviousParent() (*BNode, BNodeKeyPosition) {
+func (cursor *Cursor) moveToPreviousParent() (*Node, NodeKeyPosition) {
 	cursor.path = cursor.path[0 : len(cursor.path)-1]
 
 	return cursor.getCurrentParent()

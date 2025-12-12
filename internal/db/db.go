@@ -2,6 +2,7 @@ package db
 
 import (
 	"distributed-storage/internal/kv"
+	"distributed-storage/internal/vals"
 	"encoding/json"
 	"fmt"
 )
@@ -17,25 +18,23 @@ type Database struct {
 
 type DatabaseConfig struct {
 	Directory string
+	InMemory  bool
 }
 
 func NewDatabase(config *DatabaseConfig) (*Database, error) {
-	storageDirectory := config.Directory
-
-	if storageDirectory == "" {
-		storageDirectory = DEFAULT_DIRECTORY
+	storage, err := initializeStorage(config)
+	if err != nil {
+		return nil, err
 	}
 
-	storageDirectory += "/data"
-
-	database := &Database{
-		kv:     kv.NewKeyValue(storageDirectory),
+	db := &Database{
+		kv:     kv.NewKeyValue(storage),
 		tables: make(map[string]*Table),
 	}
 
-	database.initSystemTables()
+	db.initSystemTables()
 
-	return database, nil
+	return db, nil
 }
 
 func (database *Database) Get(tableName string) *Table {
@@ -73,7 +72,7 @@ func (database *Database) Create(schema *TableSchema) (*Table, error) {
 	return table, nil
 }
 
-func (database *Database) List() []*Object {
+func (database *Database) List() []*vals.Object {
 	schemaTable := database.Get(SCHEMA_TABLE_NAME)
 
 	return schemaTable.GetAll()
@@ -82,8 +81,8 @@ func (database *Database) List() []*Object {
 func (database *Database) getTableSchema(tableName string) *TableSchema {
 	schemaTable := database.Get(SCHEMA_TABLE_NAME)
 
-	query := NewObject().
-		Set("name", NewStringValue(tableName))
+	query := vals.NewObject().
+		Set("name", vals.NewString(tableName))
 
 	record, err := schemaTable.Get(query)
 
@@ -97,7 +96,7 @@ func (database *Database) getTableSchema(tableName string) *TableSchema {
 
 	tableSchema := &TableSchema{}
 
-	if err := json.Unmarshal([]byte(record.Get("definition").(*StringValue).Value()), tableSchema); err != nil {
+	if err := json.Unmarshal([]byte(record.Get("definition").(*vals.StringValue).Value()), tableSchema); err != nil {
 		panic(fmt.Errorf("Database: can`t parse schema %w", err))
 	}
 
@@ -110,9 +109,9 @@ func (database *Database) saveTableSchema(schema *TableSchema) error {
 	schemaTable := database.Get(SCHEMA_TABLE_NAME)
 	stringifiedSchema, _ := json.Marshal(schema)
 
-	query := NewObject().
-		Set("name", NewStringValue(schema.Name)).
-		Set("definition", NewStringValue(string(stringifiedSchema)))
+	query := vals.NewObject().
+		Set("name", vals.NewString(schema.Name)).
+		Set("definition", vals.NewString(string(stringifiedSchema)))
 
 	if err := schemaTable.Insert(query); err != nil {
 		transaction.Abort()
@@ -133,7 +132,7 @@ func (database *Database) initSystemTables() {
 			Name:         META_TABLE_NAME,
 			ColumnNames:  []string{"key", "value"},
 			PrimaryIndex: []string{"key"},
-			ColumnTypes:  map[string]ValueType{"key": VALUE_TYPE_STRING, "value": VALUE_TYPE_UINT32},
+			ColumnTypes:  map[string]vals.ValueType{"key": vals.TYPE_STRING, "value": vals.TYPE_UINT32},
 		},
 		kv: kv.WithPrefix(database.kv, META_TABLE_NAME),
 	}
@@ -143,7 +142,7 @@ func (database *Database) initSystemTables() {
 			Name:         SCHEMA_TABLE_NAME,
 			ColumnNames:  []string{"name", "definition"},
 			PrimaryIndex: []string{"name"},
-			ColumnTypes:  map[string]ValueType{"name": VALUE_TYPE_STRING, "definition": VALUE_TYPE_STRING},
+			ColumnTypes:  map[string]vals.ValueType{"name": vals.TYPE_STRING, "definition": vals.TYPE_STRING},
 		},
 		kv: kv.WithPrefix(database.kv, SCHEMA_TABLE_NAME),
 	}

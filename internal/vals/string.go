@@ -1,4 +1,4 @@
-package db
+package vals
 
 import "bytes"
 
@@ -11,7 +11,7 @@ func (value *StringValue) Value() string {
 }
 
 func (value *StringValue) Type() ValueType {
-	return VALUE_TYPE_STRING
+	return TYPE_STRING
 }
 
 func (value *StringValue) Size() int {
@@ -22,7 +22,7 @@ func (value *StringValue) Empty() bool {
 	return false
 }
 
-func (value *StringValue) serialize() []byte {
+func (value *StringValue) Serialize() []byte {
 	escapeSymbolsCount := bytes.Count(value.str, []byte{0}) + bytes.Count(value.str, []byte{1})
 	serializedString := make([]byte, len(value.str)+escapeSymbolsCount+1)
 
@@ -44,7 +44,7 @@ func (value *StringValue) serialize() []byte {
 	return serializedString
 }
 
-func (value *StringValue) parse(serializedString []byte) {
+func (value *StringValue) Parse(serializedString []byte) {
 	stringLength := bytes.Index(serializedString, []byte{0})
 	escapeSymbolsCount := bytes.Count(serializedString[:stringLength], []byte{0x01, 0x01}) + bytes.Count(serializedString[:stringLength], []byte{0x01, 0x02})
 
@@ -61,6 +61,6 @@ func (value *StringValue) parse(serializedString []byte) {
 	}
 }
 
-func NewStringValue(value string) *StringValue {
+func NewString(value string) *StringValue {
 	return &StringValue{[]byte(value)}
 }

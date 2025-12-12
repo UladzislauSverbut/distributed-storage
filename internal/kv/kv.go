@@ -1,37 +1,38 @@
 package kv
 
 import (
-	"distributed-storage/internal/backend"
+	"distributed-storage/internal/pager"
+	"distributed-storage/internal/store"
 	"distributed-storage/internal/tree"
 	"encoding/binary"
 	"fmt"
 )
 
-var config = tree.BTreeConfig{
+var config = tree.TreeConfig{
 	PageSize:     16 * 1024, // 16KB
 	MaxValueSize: 3 * 1024,  // 3KB
 	MaxKeySize:   1 * 1024,  // 1KB
 }
 
 type KeyValue struct {
-	tree      *tree.BTree
+	tree      *tree.Tree
 	parent    *KeyValue
-	storage   *tree.Storage
+	storage   *KeyValueStorage
 	namespace []byte
 }
 
-func NewKeyValue(filePath string) *KeyValue {
-	backend, err := backend.NewFileBackend(filePath)
+func NewKeyValue(storage store.Storage) *KeyValue {
+	pageManager, err := pager.NewPageManager(storage, config.PageSize)
 
 	if err != nil {
-		panic(fmt.Errorf("Failed to create file backend: %w", err))
+		panic(fmt.Errorf("KeyValue: cant`t initialize internal storage %w", err))
 	}
 
-	storage := tree.NewStorage(backend, config.PageSize)
+	keyValueStorage := NewStorage(pageManager, config.PageSize)
 
 	return &KeyValue{
-		tree:    tree.NewBTree(storage.GetRoot(), storage, config),
-		storage: storage,
+		tree:    tree.NewTree(keyValueStorage.GetRoot(), tree.NewStorage(pageManager, config.PageSize), config),
+		storage: keyValueStorage,
 	}
 }
 
@@ -40,7 +41,7 @@ func WithPrefix(keyValue *KeyValue, prefix string) *KeyValue {
 	value, err := keyValue.tree.Get(namespace)
 
 	if err != nil {
-		panic(fmt.Errorf("Child KeyValue can`t be created: %w", err))
+		panic(fmt.Errorf("KeyValue: can`t find subtree %w", err))
 	}
 
 	subTreePointer := tree.NULL_NODE
@@ -51,7 +52,7 @@ func WithPrefix(keyValue *KeyValue, prefix string) *KeyValue {
 
 	return &KeyValue{
 		namespace: namespace,
-		tree:      tree.NewBTree(subTreePointer, keyValue.storage, config),
+		tree:      tree.NewTree(subTreePointer, tree.NewStorage(keyValue.storage.pageManager, config.PageSize), config),
 		parent:    keyValue,
 		storage:   keyValue.storage,
 	}

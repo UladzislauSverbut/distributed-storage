@@ -1,4 +1,4 @@
-package db
+package vals
 
 import "fmt"
 
@@ -8,30 +8,30 @@ type Value interface {
 	Type() ValueType
 	Size() int
 	Empty() bool
-	serialize() []byte
-	parse([]byte)
+	Serialize() []byte
+	Parse([]byte)
 }
 
 const (
-	VALUE_TYPE_NULL ValueType = iota
-	VALUE_TYPE_STRING
-	VALUE_TYPE_INT32
-	VALUE_TYPE_INT64
-	VALUE_TYPE_UINT32
-	VALUE_TYPE_UINT64
+	TYPE_NULL ValueType = iota
+	TYPE_STRING
+	TYPE_INT32
+	TYPE_INT64
+	TYPE_UINT32
+	TYPE_UINT64
 )
 
-func createValue(valueType ValueType) Value {
+func New(valueType ValueType) Value {
 	switch valueType {
-	case VALUE_TYPE_STRING:
+	case TYPE_STRING:
 		return &StringValue{}
-	case VALUE_TYPE_INT32:
+	case TYPE_INT32:
 		return &IntValue[int32]{}
-	case VALUE_TYPE_INT64:
+	case TYPE_INT64:
 		return &IntValue[int64]{}
-	case VALUE_TYPE_UINT32:
+	case TYPE_UINT32:
 		return &IntValue[uint32]{}
-	case VALUE_TYPE_UINT64:
+	case TYPE_UINT64:
 		return &IntValue[uint64]{}
 	default:
 		panic(fmt.Sprintf("Value can`t be created because type is not supported %d", valueType))

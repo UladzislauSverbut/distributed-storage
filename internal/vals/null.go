@@ -1,4 +1,4 @@
-package db
+package vals
 
 type NullValue struct {
 }
@@ -8,7 +8,7 @@ func (value *NullValue) Value() {
 }
 
 func (value *NullValue) Type() ValueType {
-	return VALUE_TYPE_NULL
+	return TYPE_NULL
 }
 
 func (value *NullValue) Size() int {
@@ -19,14 +19,14 @@ func (value *NullValue) Empty() bool {
 	return true
 }
 
-func (value *NullValue) serialize() []byte {
+func (value *NullValue) Serialize() []byte {
 	return []byte{0}
 }
 
-func (value *NullValue) parse(payload []byte) {
+func (value *NullValue) Parse(payload []byte) {
 	return
 }
 
-func NewNullValue() *NullValue {
+func NewNull() *NullValue {
 	return &NullValue{}
 }

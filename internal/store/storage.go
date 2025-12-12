@@ -1,6 +1,6 @@
-package backend
+package store
 
-type Backend interface {
+type Storage interface {
 	Flush() error
 	Size() int
 	IncreaseSize(size int) error
