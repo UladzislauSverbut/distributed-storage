@@ -3,22 +3,42 @@ package kv
 import (
 	"distributed-storage/internal/pager"
 	"distributed-storage/internal/tree"
+	"encoding/binary"
 	"fmt"
 )
 
 type SnapshotID int
 
 type KeyValueStorage struct {
-	tree.TreeStorage
 	pageManager *pager.PageManager
 	snapshots   map[SnapshotID]pager.PageManagerState
 }
 
 func NewStorage(pageManager *pager.PageManager, pageSize int) *KeyValueStorage {
 	return &KeyValueStorage{
-		TreeStorage: *tree.NewStorage(pageManager, pageSize),
+		pageManager: pageManager,
 		snapshots:   map[SnapshotID]pager.PageManagerState{},
 	}
+}
+
+func (storage *KeyValueStorage) GetRoot() tree.TreeRootPointer {
+	if storage.pageManager.GetPagesCount() > 1 {
+		return binary.LittleEndian.Uint64(storage.pageManager.GetMetaInfo())
+	}
+
+	return tree.NULL_NODE
+}
+
+func (storage *KeyValueStorage) SaveRoot(pointer tree.TreeRootPointer) error {
+	// update root pointer;
+	buffer := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buffer, pointer)
+
+	return storage.pageManager.WriteMetaInfo(buffer)
+}
+
+func (storage *KeyValueStorage) Flush() error {
+	return storage.pageManager.WritePages()
 }
 
 func (storage *KeyValueStorage) Snapshot() SnapshotID {

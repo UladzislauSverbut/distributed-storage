@@ -23,22 +23,6 @@ func NewStorage(pageManager *pager.PageManager, pageSize int) *TreeStorage {
 	return &TreeStorage{pageManager: pageManager}
 }
 
-func (storage *TreeStorage) GetRoot() TreeRootPointer {
-	if storage.pageManager.GetPagesCount() > 1 {
-		return binary.LittleEndian.Uint64(storage.pageManager.GetMetaInfo())
-	}
-
-	return NULL_NODE
-}
-
-func (storage *TreeStorage) SaveRoot(pointer TreeRootPointer) error {
-	// update root pointer;
-	buffer := make([]byte, 8)
-	binary.LittleEndian.PutUint64(buffer, pointer)
-
-	return storage.pageManager.WriteMetaInfo(buffer)
-}
-
 func (storage *TreeStorage) Get(pointer NodePointer) *Node {
 	return &Node{data: storage.pageManager.GetPage(pointer)}
 }
@@ -51,8 +35,4 @@ func (storage *TreeStorage) Create(node *Node) NodePointer {
 
 func (storage *TreeStorage) Delete(pointer NodePointer) {
 	storage.pageManager.DeletePage(pointer)
-}
-
-func (storage *TreeStorage) Flush() error {
-	return storage.pageManager.WritePages()
 }

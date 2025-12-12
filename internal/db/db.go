@@ -23,6 +23,7 @@ type DatabaseConfig struct {
 
 func NewDatabase(config *DatabaseConfig) (*Database, error) {
 	storage, err := initializeStorage(config)
+
 	if err != nil {
 		return nil, err
 	}
