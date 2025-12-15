@@ -75,25 +75,25 @@ func (storage *FileStorage) IncreaseSize(size int) error {
 	return nil
 }
 
-func (storage *FileStorage) MemoryBlock(size int, offset int) []byte {
+func (storage *FileStorage) MemorySegment(size int, offset int) []byte {
 	if size+offset > storage.fileSize {
-		panic(fmt.Sprintf("FileStorage: getting memory block is out of range %d > %d", size+offset, storage.fileSize))
+		panic(fmt.Sprintf("FileStorage: getting memory segment is out of range %d > %d", size+offset, storage.fileSize))
 	}
 
-	return findMemoryBlock(storage.virtualMemory, size, offset)
+	return findMemorySegment(storage.virtualMemory, size, offset)
 }
 
-func (storage *FileStorage) UpdateMemoryBlock(data []byte, offset int) {
+func (storage *FileStorage) UpdateMemorySegment(data []byte, offset int) {
 	if len(data)+offset > storage.fileSize {
-		panic(fmt.Sprintf("FileStorage: updating memory block is out of range %d > %d", len(data)+offset, storage.fileSize))
+		panic(fmt.Sprintf("FileStorage: updating memory segment is out of range %d > %d", len(data)+offset, storage.fileSize))
 	}
 
-	writeMemoryBlock(storage.virtualMemory, data, offset)
+	writeMemorySegment(storage.virtualMemory, data, offset)
 }
 
-func (storage *FileStorage) FlushMemoryBlock(data []byte, offset int) error {
+func (storage *FileStorage) SaveMemorySegment(data []byte, offset int) error {
 	if len(data)+offset > storage.fileSize {
-		panic(fmt.Sprintf("FileStorage: flushed memory block is out of range %d > %d", len(data)+offset, storage.fileSize))
+		panic(fmt.Sprintf("FileStorage: flushed memory segment is out of range %d > %d", len(data)+offset, storage.fileSize))
 	}
 
 	_, err := storage.file.WriteAt(data, int64(offset))

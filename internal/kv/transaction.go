@@ -24,7 +24,7 @@ func (transaction *Transaction) Abort() {
 }
 
 func (transaction *Transaction) Commit() error {
-	if err := transaction.kv.storage.Flush(); err != nil {
+	if err := transaction.kv.storage.Save(); err != nil {
 		transaction.Abort()
 		return err
 	}

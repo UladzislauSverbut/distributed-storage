@@ -11,12 +11,12 @@ type TreeStorage struct {
 }
 
 func NewStorage(pageManager *pager.PageManager, pageSize int) *TreeStorage {
-	if pageManager.GetPagesCount() > 1 {
+	if pageManager.PagesCount() > 1 {
 		// validate root node pointer
-		rootPointer := binary.LittleEndian.Uint64(pageManager.GetMetaInfo())
+		rootPointer := binary.LittleEndian.Uint64(pageManager.Header())
 
-		if rootPointer > uint64(pageManager.GetPagesCount()) {
-			panic(errors.New("TreeStorage can`t read data file because content is corrupted"))
+		if rootPointer > uint64(pageManager.PagesCount()) {
+			panic(errors.New("TreeStorage can`t read data from pager because content is corrupted"))
 		}
 	}
 
@@ -24,7 +24,7 @@ func NewStorage(pageManager *pager.PageManager, pageSize int) *TreeStorage {
 }
 
 func (storage *TreeStorage) Get(pointer NodePointer) *Node {
-	return &Node{data: storage.pageManager.GetPage(pointer)}
+	return &Node{data: storage.pageManager.Page(pointer)}
 }
 
 func (storage *TreeStorage) Create(node *Node) NodePointer {
@@ -34,5 +34,5 @@ func (storage *TreeStorage) Create(node *Node) NodePointer {
 }
 
 func (storage *TreeStorage) Delete(pointer NodePointer) {
-	storage.pageManager.DeletePage(pointer)
+	storage.pageManager.FreePage(pointer)
 }

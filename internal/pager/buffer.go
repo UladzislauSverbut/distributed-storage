@@ -10,8 +10,8 @@ const HEADER_SIZE = 18 // size of block header in file bytes
 /*
    Page Buffer Block Format
 
-   | pages stored in block | total pages in chain | pointer to previous block | pointers to pages in block |
-   |          2B           |          8B          |             8B            |    number of pages * 8B    |
+   | pages stored in block | total pages in chain | pointer to previous block | pointers to pages in block with their versions |
+   |          2B           |          8B          |             8B            |    			number of pages * 16B    		   |
 */
 
 type PageBuffer struct {
@@ -28,28 +28,22 @@ func NewPageBuffer(head PagePointer, pageManager *PageManager) *PageBuffer {
 	}
 }
 
-func (buffer *PageBuffer) getPage(pageNumber int) PagePointer {
-	pagesBlock := buffer.pageManager.GetPage(buffer.head)
+func (buffer *PageBuffer) pageAt(pageNumber int) PagePointer {
+	pagesBlock := buffer.pageManager.Page(buffer.head)
 
-	for buffer.getBlockSize(pagesBlock) < pageNumber {
-		pageNumber -= buffer.getBlockSize(pagesBlock)
-		pagesBlock = buffer.pageManager.GetPage((buffer.getPreviousBlock(pagesBlock)))
+	for buffer.blockSize(pagesBlock) < pageNumber {
+		pageNumber -= buffer.blockSize(pagesBlock)
+		pagesBlock = buffer.pageManager.Page(buffer.previousBlock(pagesBlock))
 	}
 
-	return buffer.getBlockPage(pagesBlock, pageNumber)
+	return buffer.blockPage(pagesBlock, pageNumber)
 }
 
-func (buffer *PageBuffer) getPagesCount() int {
-	pagesBlock := buffer.pageManager.GetPage(buffer.head)
-
-	return buffer.getBlockTotalPages(pagesBlock)
-}
-
-func (buffer *PageBuffer) updatePages(removedPagesCount int, addedPages []PagePointer) {
+func (buffer *PageBuffer) applyChanges(removedPagesCount int, addedPages []PagePointer) {
 	pagesBlockPointer := buffer.head
-	pagesBlock := buffer.pageManager.GetPage(pagesBlockPointer)
+	pagesBlock := buffer.pageManager.Page(pagesBlockPointer)
 
-	if buffer.getBlockTotalPages(pagesBlock) < removedPagesCount {
+	if buffer.blockTotalPages(pagesBlock) < removedPagesCount {
 		panic(fmt.Sprintf("PagePool: not enough pages to remove %d pages", removedPagesCount))
 	}
 
@@ -58,29 +52,29 @@ func (buffer *PageBuffer) updatePages(removedPagesCount int, addedPages []PagePo
 	}
 
 	if len(addedPages) > 0 {
-		buffer.savePages(addedPages)
+		buffer.addPages(addedPages)
 	}
 }
 
 func (buffer *PageBuffer) removePages(count int) []PagePointer {
 	pagesBlockPointer := buffer.head
-	pagesBlock := buffer.pageManager.GetPage(pagesBlockPointer)
+	pagesBlock := buffer.pageManager.Page(pagesBlockPointer)
 	releasedPages := make([]PagePointer, 0)
 
-	for count > buffer.getBlockSize(pagesBlock) {
+	for count > buffer.blockSize(pagesBlock) {
 		releasedPages = append(releasedPages, pagesBlockPointer)
 
-		count -= buffer.getBlockSize(pagesBlock)
-		pagesBlockPointer = buffer.getPreviousBlock(pagesBlock)
-		pagesBlock = buffer.pageManager.GetPage(pagesBlockPointer)
+		count -= buffer.blockSize(pagesBlock)
+		pagesBlockPointer = buffer.previousBlock(pagesBlock)
+		pagesBlock = buffer.pageManager.Page(pagesBlockPointer)
 	}
 
 	if count != 0 {
 		releasedPages = append(releasedPages, pagesBlockPointer)
 
-		buffer.reusablePages = append(buffer.reusablePages, buffer.getBlockPages(pagesBlock, count, buffer.getBlockSize(pagesBlock))...)
+		buffer.reusablePages = append(buffer.reusablePages, buffer.blockPages(pagesBlock, count, buffer.blockSize(pagesBlock))...)
 
-		pagesBlockPointer = buffer.getPreviousBlock(pagesBlock)
+		pagesBlockPointer = buffer.previousBlock(pagesBlock)
 
 	}
 
@@ -89,9 +83,15 @@ func (buffer *PageBuffer) removePages(count int) []PagePointer {
 	return releasedPages
 }
 
-func (buffer *PageBuffer) savePages(pages []PagePointer) {
+func (buffer *PageBuffer) availablePageCount() int {
+	pagesBlock := buffer.pageManager.Page(buffer.head)
+
+	return buffer.blockTotalPages(pagesBlock)
+}
+
+func (buffer *PageBuffer) addPages(pages []PagePointer) {
 	pagesBlockPointer := buffer.head
-	pagesBlock := buffer.pageManager.GetPage(pagesBlockPointer)
+	pagesBlock := buffer.pageManager.Page(pagesBlockPointer)
 
 	for len(pages) > 0 {
 		newBlockPointer := NULL_PAGE
@@ -103,18 +103,18 @@ func (buffer *PageBuffer) savePages(pages []PagePointer) {
 			newBlockPointer = buffer.pageManager.allocateVirtualPage()
 		}
 
-		newPagesBlock := buffer.pageManager.GetPage(newBlockPointer)
+		newPagesBlock := buffer.pageManager.Page(newBlockPointer)
 
-		if len(pages)+len(buffer.reusablePages) <= buffer.getBlockCapacity(newPagesBlock) {
+		if len(pages)+len(buffer.reusablePages) <= buffer.blockCapacity(newPagesBlock) {
 			pages = append(pages, buffer.reusablePages...)
 			buffer.reusablePages = nil
 		}
 
-		buffer.fillBlock(newPagesBlock, pagesBlock, pagesBlockPointer, pages[:min(buffer.getBlockCapacity(newPagesBlock), len(pages))])
+		buffer.initBlock(newPagesBlock, pagesBlock, pagesBlockPointer, pages[:min(buffer.blockCapacity(newPagesBlock), len(pages))])
 
 		buffer.pageManager.UpdatePage(newBlockPointer, newPagesBlock)
 
-		pages = pages[min(buffer.getBlockCapacity(newPagesBlock), len(pages)):]
+		pages = pages[min(buffer.blockCapacity(newPagesBlock), len(pages)):]
 		pagesBlockPointer = newBlockPointer
 		pagesBlock = newPagesBlock
 
@@ -128,45 +128,45 @@ func (buffer *PageBuffer) savePages(pages []PagePointer) {
 	buffer.head = pagesBlockPointer
 }
 
-func (buffer *PageBuffer) getBlockPage(pagesBlock []byte, pageNumber int) PagePointer {
+func (buffer *PageBuffer) blockPage(pagesBlock []byte, pageNumber int) PagePointer {
 	return PagePointer(binary.LittleEndian.Uint64(pagesBlock[HEADER_SIZE+(pageNumber*8):]))
 }
 
-func (buffer *PageBuffer) getBlockPages(pagesBlock []byte, start int, end int) []PagePointer {
+func (buffer *PageBuffer) blockPages(pagesBlock []byte, start int, end int) []PagePointer {
 	pages := make([]PagePointer, 0, end-start)
 
 	for pageNumber := start; pageNumber < end; pageNumber++ {
-		pages = append(pages, buffer.getBlockPage(pagesBlock, pageNumber))
+		pages = append(pages, buffer.blockPage(pagesBlock, pageNumber))
 	}
 
 	return pages
 }
 
-func (buffer *PageBuffer) getBlockTotalPages(pagesBlock []byte) int {
+func (buffer *PageBuffer) blockTotalPages(pagesBlock []byte) int {
 	return int(binary.LittleEndian.Uint64(pagesBlock[2:10]))
 }
 
-func (buffer *PageBuffer) getBlockSize(pagesBlock []byte) int {
+func (buffer *PageBuffer) blockSize(pagesBlock []byte) int {
 	return int(binary.LittleEndian.Uint16(pagesBlock))
 }
 
-func (buffer *PageBuffer) getBlockCapacity(pagesBlock []byte) int {
+func (buffer *PageBuffer) blockCapacity(pagesBlock []byte) int {
 	return (len(pagesBlock) - HEADER_SIZE) / 8
 }
 
-func (buffer *PageBuffer) getPreviousBlock(pagesBlock []byte) PagePointer {
+func (buffer *PageBuffer) previousBlock(pagesBlock []byte) PagePointer {
 	return PagePointer(binary.LittleEndian.Uint64(pagesBlock[10:]))
 }
 
-func (buffer *PageBuffer) fillBlock(pagesBlock []byte, previousBlock []byte, previousBlockPointer PagePointer, storedPages []PagePointer) {
+func (buffer *PageBuffer) initBlock(pagesBlock []byte, previousBlock []byte, previousBlockPointer PagePointer, storedPages []PagePointer) {
 	storedPagesCount := len(storedPages)
 
-	if buffer.getBlockCapacity(pagesBlock) < storedPagesCount {
+	if buffer.blockCapacity(pagesBlock) < storedPagesCount {
 		panic(fmt.Sprintf("PageBuffer: not enough space in block to store %d pages", storedPagesCount))
 	}
 
 	binary.LittleEndian.PutUint16(pagesBlock, uint16(storedPagesCount))
-	binary.LittleEndian.PutUint64(pagesBlock[2:], uint64(buffer.getBlockTotalPages(previousBlock)+storedPagesCount))
+	binary.LittleEndian.PutUint64(pagesBlock[2:], uint64(buffer.blockTotalPages(previousBlock)+storedPagesCount))
 	binary.LittleEndian.PutUint64(pagesBlock[10:], previousBlockPointer)
 
 	for i, pagePointer := range storedPages {

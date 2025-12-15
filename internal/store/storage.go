@@ -4,7 +4,7 @@ type Storage interface {
 	Flush() error
 	Size() int
 	IncreaseSize(size int) error
-	MemoryBlock(size int, offset int) []byte
-	UpdateMemoryBlock(data []byte, offset int)
-	FlushMemoryBlock(data []byte, offset int) error
+	MemorySegment(size int, offset int) []byte
+	UpdateMemorySegment(data []byte, offset int)
+	SaveMemorySegment(data []byte, offset int) error
 }

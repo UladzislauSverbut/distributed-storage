@@ -22,8 +22,8 @@ func NewStorage(pageManager *pager.PageManager, pageSize int) *KeyValueStorage {
 }
 
 func (storage *KeyValueStorage) GetRoot() tree.TreeRootPointer {
-	if storage.pageManager.GetPagesCount() > 1 {
-		return binary.LittleEndian.Uint64(storage.pageManager.GetMetaInfo())
+	if storage.pageManager.PagesCount() > 1 {
+		return binary.LittleEndian.Uint64(storage.pageManager.Header())
 	}
 
 	return tree.NULL_NODE
@@ -34,28 +34,28 @@ func (storage *KeyValueStorage) SaveRoot(pointer tree.TreeRootPointer) error {
 	buffer := make([]byte, 8)
 	binary.LittleEndian.PutUint64(buffer, pointer)
 
-	return storage.pageManager.WriteMetaInfo(buffer)
+	return storage.pageManager.SaveHeader(buffer)
 }
 
-func (storage *KeyValueStorage) Flush() error {
-	return storage.pageManager.WritePages()
+func (storage *KeyValueStorage) Save() error {
+	return storage.pageManager.SavePages()
 }
 
 func (storage *KeyValueStorage) Snapshot() SnapshotID {
 	snapshotID := SnapshotID(len(storage.snapshots))
-	snapshot := storage.pageManager.GetState()
+	pageManagerState := storage.pageManager.State()
 
-	storage.snapshots[snapshotID] = snapshot
+	storage.snapshots[snapshotID] = pageManagerState
 
 	return snapshotID
 }
 
 func (storage *KeyValueStorage) Restore(id SnapshotID) {
-	snapshot, exist := storage.snapshots[id]
+	pageManagerState, exist := storage.snapshots[id]
 
 	if !exist {
 		panic(fmt.Sprintf("KeyValueStorage: snapshot with ID %d doesn`t exist", id))
 	}
 
-	storage.pageManager.ApplyState(snapshot)
+	storage.pageManager.SetState(pageManagerState)
 }

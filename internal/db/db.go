@@ -105,7 +105,7 @@ func (database *Database) getTableSchema(tableName string) *TableSchema {
 }
 
 func (database *Database) saveTableSchema(schema *TableSchema) error {
-	transaction := NewTransaction(*database, SCHEMA_TABLE_NAME)
+	transaction := NewTransaction(database, SCHEMA_TABLE_NAME)
 
 	schemaTable := database.Get(SCHEMA_TABLE_NAME)
 	stringifiedSchema, _ := json.Marshal(schema)

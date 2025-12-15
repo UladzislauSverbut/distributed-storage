@@ -10,7 +10,7 @@ type Transaction struct {
 	inner     *kv.Transaction
 }
 
-func NewTransaction(database Database, tableName string) *Transaction {
+func NewTransaction(database *Database, tableName string) *Transaction {
 	return &Transaction{
 		tableName: tableName,
 		inner:     kv.NewTransaction(database.kv),
