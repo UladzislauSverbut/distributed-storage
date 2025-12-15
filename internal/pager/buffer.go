@@ -10,8 +10,8 @@ const HEADER_SIZE = 18 // size of block header in file bytes
 /*
    Page Buffer Block Format
 
-   | pages stored in block | total pages in chain | pointer to previous block | pointers to pages in block |
-   |          2B           |          8B          |             8B            |    number of pages * 8B    |
+   | pages stored in block | total pages in chain | pointer to previous block | pointers to pages in block with their versions |
+   |          2B           |          8B          |             8B            |    			number of pages * 16B    		   |
 */
 
 type PageBuffer struct {

@@ -9,10 +9,11 @@ func initializeStorage(config *DatabaseConfig) (store.Storage, error) {
 		return store.NewMemoryStorage(), nil
 	}
 
-	dir := config.Directory
-	if dir == "" {
-		dir = DEFAULT_DIRECTORY
+	directory := config.Directory
+
+	if directory == "" {
+		directory = DEFAULT_DIRECTORY
 	}
 
-	return store.NewFileStorage(dir + "/data")
+	return store.NewFileStorage(directory + "/data")
 }
