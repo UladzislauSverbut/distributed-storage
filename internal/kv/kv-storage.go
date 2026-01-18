@@ -14,7 +14,7 @@ type KeyValueStorage struct {
 	snapshots   map[SnapshotID]pager.PageManagerState
 }
 
-func NewStorage(pageManager *pager.PageManager, pageSize int) *KeyValueStorage {
+func NewStorage(pageManager *pager.PageManager) *KeyValueStorage {
 	return &KeyValueStorage{
 		pageManager: pageManager,
 		snapshots:   map[SnapshotID]pager.PageManagerState{},

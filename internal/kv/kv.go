@@ -2,7 +2,6 @@ package kv
 
 import (
 	"distributed-storage/internal/pager"
-	"distributed-storage/internal/store"
 	"distributed-storage/internal/tree"
 	"encoding/binary"
 	"fmt"
@@ -21,18 +20,13 @@ type KeyValue struct {
 	namespace []byte
 }
 
-func NewKeyValue(storage store.Storage) *KeyValue {
-	pageManager, err := pager.NewPageManager(storage, config.PageSize)
+type KVRootPointer = uint64
 
-	if err != nil {
-		panic(fmt.Errorf("KeyValue: cant`t initialize internal storage %w", err))
-	}
-
-	keyValueStorage := NewStorage(pageManager, config.PageSize)
+func NewKeyValue(root KVRootPointer, pageManager *pager.PageManager) *KeyValue {
 
 	return &KeyValue{
-		tree:    tree.NewTree(keyValueStorage.GetRoot(), tree.NewStorage(pageManager, config.PageSize), config),
-		storage: keyValueStorage,
+		tree:    tree.NewTree(root, tree.NewStorage(pageManager, config.PageSize), config),
+		storage: NewStorage(pageManager),
 	}
 }
 

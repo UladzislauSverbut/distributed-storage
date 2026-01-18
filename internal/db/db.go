@@ -2,35 +2,54 @@ package db
 
 import (
 	"distributed-storage/internal/kv"
+	"distributed-storage/internal/pager"
 	"distributed-storage/internal/vals"
-	"encoding/json"
-	"fmt"
+	"encoding/binary"
+	"sync"
+	"sync/atomic"
 )
 
 const DEFAULT_DIRECTORY = "/var/lib/kv"
 const META_TABLE_NAME = "@meta"
 const SCHEMA_TABLE_NAME = "@schemas"
 
+type DBVersion uint64
+type TransactionID uint64
+
 type Database struct {
-	kv     *kv.KeyValue
-	tables map[string]*Table
+	root              kv.KVRootPointer
+	version           DBVersion
+	pageManager       *pager.PageManager
+	nextTransactionID TransactionID
+
+	transactions sync.Map
+	tables       sync.Map
 }
 
 type DatabaseConfig struct {
 	Directory string
 	InMemory  bool
+	PageSize  int
 }
 
 func NewDatabase(config *DatabaseConfig) (*Database, error) {
-	storage, err := initializeStorage(config)
+	pageManager, err := initializePageManager(config)
 
 	if err != nil {
 		return nil, err
 	}
 
+	header := pageManager.Header()
+
+	root := binary.LittleEndian.Uint64(header[:8])
+	version := binary.LittleEndian.Uint64(header[8:16])
+	nextTransactionID := binary.LittleEndian.Uint64(header[16:24])
+
 	db := &Database{
-		kv:     kv.NewKeyValue(storage),
-		tables: make(map[string]*Table),
+		root:              kv.KVRootPointer(root),
+		version:           DBVersion(version),
+		pageManager:       pageManager,
+		nextTransactionID: TransactionID(nextTransactionID),
 	}
 
 	db.initSystemTables()
@@ -38,113 +57,86 @@ func NewDatabase(config *DatabaseConfig) (*Database, error) {
 	return db, nil
 }
 
-func (database *Database) Get(tableName string) *Table {
-	_, exist := database.tables[tableName]
+func (db *Database) StartTransaction(request func(*Transaction)) {
+	transactionId := atomic.AddUint64((*uint64)(&db.nextTransactionID), 1)
 
-	if !exist {
-		schema := database.getTableSchema(tableName)
+	transaction := NewTransaction(db, TransactionID(transactionId))
 
-		if schema != nil {
-			database.tables[tableName] = &Table{schema: schema, kv: kv.WithPrefix(database.kv, schema.Name)}
-		}
-	}
+	db.transactions.Store(transactionId, transaction)
 
-	return database.tables[tableName]
+	request(transaction)
+
+	transaction.Commit()
 }
 
-func (database *Database) Create(schema *TableSchema) (*Table, error) {
-	if err := database.validateTableSchema(schema); err != nil {
-		return nil, err
-	}
+func (db *Database) initSystemTables() {
+	db.StartTransaction(func(tx *Transaction) {
+		tx.CreateTable(
+			&TableSchema{
+				Name:         META_TABLE_NAME,
+				ColumnNames:  []string{"key", "value"},
+				PrimaryIndex: []string{"key"},
+				ColumnTypes:  map[string]vals.ValueType{"key": vals.TYPE_STRING, "value": vals.TYPE_STRING},
+			},
+		)
 
-	table := database.Get(schema.Name)
+		tx.CreateTable(
+			&TableSchema{
+				Name:         SCHEMA_TABLE_NAME,
+				ColumnNames:  []string{"name", "definition"},
+				PrimaryIndex: []string{"name"},
+				ColumnTypes:  map[string]vals.ValueType{"name": vals.TYPE_STRING, "definition": vals.TYPE_STRING},
+			},
+		)
 
-	if table != nil {
-		return nil, fmt.Errorf("Database can`t create table %s because it`s already exist", schema.Name)
-	}
-
-	database.saveTableSchema(schema)
-
-	table = &Table{
-		schema: schema,
-		kv:     kv.WithPrefix(database.kv, schema.Name),
-	}
-
-	return table, nil
+		tx.Commit()
+	})
 }
 
-func (database *Database) List() []*vals.Object {
-	schemaTable := database.Get(SCHEMA_TABLE_NAME)
+// func (db *Database) getTableSchema(tableName string) *TableSchema {
+// 	schemaTable := db.Get(SCHEMA_TABLE_NAME)
 
-	return schemaTable.GetAll()
-}
+// 	query := vals.NewObject().
+// 		Set("name", vals.NewString(tableName))
 
-func (database *Database) getTableSchema(tableName string) *TableSchema {
-	schemaTable := database.Get(SCHEMA_TABLE_NAME)
+// 	record, err := schemaTable.Get(query)
 
-	query := vals.NewObject().
-		Set("name", vals.NewString(tableName))
+// 	if err != nil {
+// 		panic(fmt.Errorf("Database: can`t read schema table %w", err))
+// 	}
 
-	record, err := schemaTable.Get(query)
+// 	if record == nil {
+// 		return nil
+// 	}
 
-	if err != nil {
-		panic(fmt.Errorf("Database: can`t read schema table %w", err))
-	}
+// 	tableSchema := &TableSchema{}
 
-	if record == nil {
-		return nil
-	}
+// 	if err := json.Unmarshal([]byte(record.Get("definition").(*vals.StringValue).Value()), tableSchema); err != nil {
+// 		panic(fmt.Errorf("Database: can`t parse schema %w", err))
+// 	}
 
-	tableSchema := &TableSchema{}
+// 	return tableSchema
+// }
 
-	if err := json.Unmarshal([]byte(record.Get("definition").(*vals.StringValue).Value()), tableSchema); err != nil {
-		panic(fmt.Errorf("Database: can`t parse schema %w", err))
-	}
+// func (db *Database) saveTableSchema(schema *TableSchema) error {
+// 	transaction := NewTransaction(db, SCHEMA_TABLE_NAME)
 
-	return tableSchema
-}
+// 	schemaTable := db.Get(SCHEMA_TABLE_NAME)
+// 	stringifiedSchema, _ := json.Marshal(schema)
 
-func (database *Database) saveTableSchema(schema *TableSchema) error {
-	transaction := NewTransaction(database, SCHEMA_TABLE_NAME)
+// 	query := vals.NewObject().
+// 		Set("name", vals.NewString(schema.Name)).
+// 		Set("definition", vals.NewString(string(stringifiedSchema)))
 
-	schemaTable := database.Get(SCHEMA_TABLE_NAME)
-	stringifiedSchema, _ := json.Marshal(schema)
+// 	if err := schemaTable.Insert(query); err != nil {
+// 		transaction.Abort()
 
-	query := vals.NewObject().
-		Set("name", vals.NewString(schema.Name)).
-		Set("definition", vals.NewString(string(stringifiedSchema)))
+// 		return fmt.Errorf("Database: can't save schema %w", err)
+// 	}
 
-	if err := schemaTable.Insert(query); err != nil {
-		transaction.Abort()
+// 	return transaction.Commit()
+// }
 
-		return fmt.Errorf("Database: can't save schema %w", err)
-	}
-
-	return transaction.Commit()
-}
-
-func (database *Database) validateTableSchema(schema *TableSchema) error {
-	return nil
-}
-
-func (database *Database) initSystemTables() {
-	database.tables[META_TABLE_NAME] = &Table{
-		schema: &TableSchema{
-			Name:         META_TABLE_NAME,
-			ColumnNames:  []string{"key", "value"},
-			PrimaryIndex: []string{"key"},
-			ColumnTypes:  map[string]vals.ValueType{"key": vals.TYPE_STRING, "value": vals.TYPE_UINT32},
-		},
-		kv: kv.WithPrefix(database.kv, META_TABLE_NAME),
-	}
-
-	database.tables[SCHEMA_TABLE_NAME] = &Table{
-		schema: &TableSchema{
-			Name:         SCHEMA_TABLE_NAME,
-			ColumnNames:  []string{"name", "definition"},
-			PrimaryIndex: []string{"name"},
-			ColumnTypes:  map[string]vals.ValueType{"name": vals.TYPE_STRING, "definition": vals.TYPE_STRING},
-		},
-		kv: kv.WithPrefix(database.kv, SCHEMA_TABLE_NAME),
-	}
-}
+// func (db *Database) validateTableSchema(schema *TableSchema) error {
+// 	return nil
+// }
