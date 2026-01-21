@@ -3,6 +3,7 @@ package db
 import (
 	"distributed-storage/internal/pager"
 	"distributed-storage/internal/store"
+	"distributed-storage/internal/vals"
 )
 
 const DEFAULT_PAGE_SIZE = 16 * 1024 // 16KB
@@ -35,4 +36,17 @@ func initializePageManager(config *DatabaseConfig) (*pager.PageManager, error) {
 	}
 
 	return pager.NewPageManager(storage, pageSize)
+}
+
+func initializeSchemaTable(pointer pager.PagePointer, pager *pager.PageManager) *Table {
+	schema := &TableSchema{
+		Name:         "@schemas",
+		ColumnNames:  []string{"name", "definition"},
+		PrimaryIndex: []string{"name"},
+		ColumnTypes:  map[string]vals.ValueType{"name": vals.TYPE_STRING, "definition": vals.TYPE_STRING},
+	}
+
+	schemaTable, _ := NewTable(pointer, pager, schema, 0)
+
+	return schemaTable
 }

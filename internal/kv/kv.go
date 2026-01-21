@@ -3,8 +3,6 @@ package kv
 import (
 	"distributed-storage/internal/pager"
 	"distributed-storage/internal/tree"
-	"encoding/binary"
-	"fmt"
 )
 
 var config = tree.TreeConfig{
@@ -14,42 +12,21 @@ var config = tree.TreeConfig{
 }
 
 type KeyValue struct {
-	tree      *tree.Tree
-	parent    *KeyValue
-	storage   *KeyValueStorage
-	namespace []byte
+	tree        *tree.Tree
+	parent      *KeyValue
+	pageManager *pager.PageManager
 }
 
-type KVRootPointer = uint64
-
-func NewKeyValue(root KVRootPointer, pageManager *pager.PageManager) *KeyValue {
+func NewKeyValue(root pager.PagePointer, pageManager *pager.PageManager) *KeyValue {
 
 	return &KeyValue{
-		tree:    tree.NewTree(root, tree.NewStorage(pageManager, config.PageSize), config),
-		storage: NewStorage(pageManager),
+		tree:        tree.NewTree(root, pageManager, config),
+		pageManager: pageManager,
 	}
 }
 
-func WithPrefix(keyValue *KeyValue, prefix string) *KeyValue {
-	namespace := []byte(prefix)
-	value, err := keyValue.tree.Get(namespace)
-
-	if err != nil {
-		panic(fmt.Errorf("KeyValue: can`t find subtree %w", err))
-	}
-
-	subTreePointer := tree.NULL_NODE
-
-	if value != nil {
-		subTreePointer = binary.LittleEndian.Uint64(value)
-	}
-
-	return &KeyValue{
-		namespace: namespace,
-		tree:      tree.NewTree(subTreePointer, tree.NewStorage(keyValue.storage.pageManager, config.PageSize), config),
-		parent:    keyValue,
-		storage:   keyValue.storage,
-	}
+func (kv *KeyValue) Root() pager.PagePointer {
+	return kv.tree.Root()
 }
 
 func (kv *KeyValue) Get(request *GetRequest) (*GetResponse, error) {
@@ -71,10 +48,6 @@ func (kv *KeyValue) Set(request *SetRequest) (*SetResponse, error) {
 		return &SetResponse{}, err
 	}
 
-	if err = kv.updateParent(); err != nil {
-		return &SetResponse{}, err
-	}
-
 	if oldValue != nil {
 		return &SetResponse{Updated: true, OldValue: oldValue}, nil
 	}
@@ -89,25 +62,5 @@ func (kv *KeyValue) Delete(request *DeleteRequest) (*DeleteResponse, error) {
 		return &DeleteResponse{}, err
 	}
 
-	if err = kv.updateParent(); err != nil {
-		return &DeleteResponse{}, err
-	}
-
 	return &DeleteResponse{OldValue: oldValue}, nil
-}
-
-func (kv *KeyValue) updateParent() error {
-	if kv.parent == nil {
-		return nil
-	}
-
-	subTreeBufferedPointer := make([]byte, 8)
-
-	binary.LittleEndian.PutUint64(subTreeBufferedPointer, kv.tree.Root())
-
-	if _, err := kv.parent.tree.Set(kv.namespace, subTreeBufferedPointer); err != nil {
-		return err
-	}
-
-	return kv.parent.updateParent()
 }

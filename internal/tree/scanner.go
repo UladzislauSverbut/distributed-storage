@@ -57,7 +57,8 @@ func (scanner *Scanner) seekLessOrEqual(key []byte) *Cursor {
 	cursor := &Cursor{tree: tree}
 
 	for parentPointer := tree.root; parentPointer != NULL_NODE; {
-		parent := tree.storage.Get(parentPointer)
+		parent := &Node{data: tree.pageManager.Page(parentPointer)}
+
 		lessOrEqualNodePointer := tree.getLessOrEqualKeyPosition(parent, key)
 
 		cursor.path = append(cursor.path, &NodePosition{parent, lessOrEqualNodePointer})

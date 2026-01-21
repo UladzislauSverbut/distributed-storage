@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"distributed-storage/internal/kv"
+	"distributed-storage/internal/pager"
 	"distributed-storage/internal/vals"
 	"encoding/binary"
 	"fmt"
@@ -28,8 +29,23 @@ type TableSchema struct {
 }
 
 type Table struct {
-	schema *TableSchema
 	kv     *kv.KeyValue
+	schema *TableSchema
+	size   uint64
+}
+
+func NewTable(root pager.PagePointer, pageManager *pager.PageManager, schema *TableSchema, size uint64) (*Table, error) {
+	table := &Table{
+		kv:     kv.NewKeyValue(root, pageManager),
+		schema: schema,
+		size:   size,
+	}
+
+	if err := table.validateTableSchema(); err != nil {
+		return nil, err
+	}
+
+	return table, nil
 }
 
 func (table *Table) Get(query *vals.Object) (*vals.Object, error) {
@@ -108,6 +124,14 @@ func (table *Table) Update(record *vals.Object) error {
 
 func (table *Table) Upsert(record *vals.Object) error {
 	return table.update(record, MODE_UPSERT)
+}
+
+func (table *Table) Size() uint64 {
+	return table.size
+}
+
+func (table *Table) Root() pager.PagePointer {
+	return table.kv.Root()
 }
 
 func (table *Table) update(record *vals.Object, mode int8) error {
@@ -373,4 +397,20 @@ func (table *Table) removeEmptyValues(values []vals.Value) []vals.Value {
 	}
 
 	return nonEmptyValues
+}
+
+func (table *Table) validateTableSchema() error {
+	if table.schema.Name == "" {
+		return fmt.Errorf("Transaction: couldn't create table because schema must have a name")
+	}
+
+	if len(table.schema.ColumnNames) == 0 {
+		return fmt.Errorf("Transaction: couldn't create table because schema must have at least one column")
+	}
+
+	if len(table.schema.PrimaryIndex) == 0 {
+		return fmt.Errorf("Transaction: couldn't create table because schema must have a primary index")
+	}
+
+	return nil
 }

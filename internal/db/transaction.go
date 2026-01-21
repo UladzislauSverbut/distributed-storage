@@ -1,18 +1,16 @@
 package db
 
 import (
-	"distributed-storage/internal/kv"
+	"distributed-storage/internal/pager"
 	"distributed-storage/internal/vals"
 	"encoding/json"
 	"fmt"
-	"sync"
 )
 
 type Transaction struct {
 	id     TransactionID
 	active bool
 	db     *Database
-	mu     sync.Mutex
 }
 
 func NewTransaction(db *Database, id TransactionID) *Transaction {
@@ -22,107 +20,107 @@ func NewTransaction(db *Database, id TransactionID) *Transaction {
 		active: true,
 	}
 
-	db.transactions.Store(id, tx)
+	db.transactions[id] = tx
 
 	return tx
 }
 
 func (tx *Transaction) Commit() error {
-	tx.mu.Lock()
-
 	if !tx.active {
 		return fmt.Errorf("Transaction: couldn't commit transaction with id %d because it is not active")
 	}
 
-	tx.active = false
-	tx.mu.Unlock()
+	if err := tx.db.SaveChanges(); err != nil {
+		tx.Rollback()
 
-	tx.db.transactions.Delete(tx.id)
+		return err
+	}
+
+	tx.active = false
+
+	delete(tx.db.transactions, tx.id)
 
 	return nil
 }
 
 func (tx *Transaction) Rollback() {
-	tx.mu.Lock()
-	defer tx.mu.Unlock()
-
 	if !tx.active {
 		return
 	}
 
-	tx.db.transactions.Delete(tx.id)
+	delete(tx.db.transactions, tx.id)
 }
 
-func (tx *Transaction) Table(tableName string) *Table {
-	table, exist := tx.db.tables.Load(tableName)
+func (tx *Transaction) Table(tableName string) (*Table, error) {
+	table, exist := tx.db.tables[tableName]
 
 	if exist {
-		return table.(*Table)
+		return table, nil
 	}
 
-	query := vals.NewObject().
-		Set("name", vals.NewString(tableName))
+	query := vals.NewObject().Set("name", vals.NewString(tableName))
 
-	schemaTable, _ := tx.db.tables.Load(SCHEMA_TABLE_NAME)
-
-	record, err := schemaTable.(*Table).Get(query)
+	record, err := tx.db.schemas.Get(query)
 
 	if err != nil {
 		panic(fmt.Errorf("Transaction: can`t read schema table %w", err))
 	}
 
 	if record == nil {
-		return nil
+		return nil, nil
 	}
 
 	tableSchema := &TableSchema{}
 
-	if err := json.Unmarshal([]byte(record.Get("definition").(*vals.StringValue).Value()), tableSchema); err != nil {
-		panic(fmt.Errorf("Transaction: can`t parse schema %w", err))
+	definition := record.Get("definition").(*vals.StringValue).Value()
+	pointer := record.Get("root").(*vals.IntValue[uint64]).Value()
+	size := record.Get("size").(*vals.IntValue[uint64]).Value()
+
+	if err := json.Unmarshal([]byte(definition), tableSchema); err != nil {
+		fmt.Errorf("Transaction: can`t parse broken table schema %w", err)
 	}
 
-	table = &Table{schema: tableSchema, kv: kv.NewKeyValue(tx.db.root, tx.db.pageManager)}
+	table, err = NewTable(pager.PagePointer(pointer), tx.db.pageManager, tableSchema, size)
 
-	tx.db.tables.Store(tableName, table)
-
-	return table.(*Table)
-}
-
-func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
-	if err := tx.validateTableSchema(schema); err != nil {
+	if err != nil {
 		return nil, err
 	}
 
-	table := &Table{schema: schema, kv: kv.NewKeyValue(tx.db.root, tx.db.pageManager)}
+	tx.db.tables[tableName] = table
 
-	_, exist := tx.db.tables.LoadOrStore(schema.Name, table)
+	return table, nil
+}
+
+func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
+	_, exist := tx.db.tables[schema.Name]
 
 	if exist {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because it`s already exist", schema.Name)
-
 	}
+
+	table, err := NewTable(pager.NULL_PAGE, tx.db.pageManager, schema, 0)
+
+	if err != nil {
+		return nil, err
+	}
+
+	stringifiedSchema, _ := json.Marshal(table.schema)
+
+	query := vals.NewObject().
+		Set("name", vals.NewString(table.schema.Name)).
+		Set("definition", vals.NewString(string(stringifiedSchema))).
+		Set("root", vals.NewInt(table.Root())).
+		Set("size", vals.NewInt(table.Size()))
+
+	if err := tx.db.schemas.Insert(query); err != nil {
+		return nil, fmt.Errorf("Transaction: couldn't save table schema %w", err)
+	}
+
+	tx.db.tables[table.schema.Name] = table
 
 	return table, nil
 }
 
 func (tx *Transaction) List() []*vals.Object {
-	schemaTable := tx.Table(SCHEMA_TABLE_NAME)
-
-	return schemaTable.GetAll()
-}
-
-func (tx *Transaction) validateTableSchema(schema *TableSchema) error {
-	if schema.Name == "" {
-		return fmt.Errorf("Transaction: couldn't create table because schema must have a name")
-	}
-
-	if len(schema.ColumnNames) == 0 {
-		return fmt.Errorf("Transaction: couldn't create table because schema must have at least one column")
-	}
-
-	if len(schema.PrimaryIndex) == 0 {
-		return fmt.Errorf("Transaction: couldn't create table because schema must have a primary index")
-	}
-
-	return nil
+	return tx.db.schemas.GetAll()
 }
