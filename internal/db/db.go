@@ -69,6 +69,8 @@ func (db *Database) SaveChanges() error {
 		return err
 	}
 
+	db.version++
+
 	header := db.pageManager.Header()
 
 	binary.LittleEndian.PutUint64(header[:8], uint64(db.schemas.Root()))

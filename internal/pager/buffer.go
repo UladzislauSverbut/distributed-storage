@@ -100,7 +100,8 @@ func (buffer *PageBuffer) addPages(pages []PagePointer) {
 			newBlockPointer = buffer.reusablePages[0]
 			buffer.reusablePages = buffer.reusablePages[1:]
 		} else {
-			newBlockPointer = buffer.pageManager.allocateVirtualPage()
+			newBlockPointer = pages[0]
+			pages = pages[1:]
 		}
 
 		newPagesBlock := buffer.pageManager.Page(newBlockPointer)
