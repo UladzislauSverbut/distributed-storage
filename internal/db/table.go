@@ -28,17 +28,23 @@ type TableSchema struct {
 	ColumnTypes      map[string]vals.ValueType
 }
 
+type TableConfig struct {
+	Root   pager.PagePointer
+	Schema *TableSchema
+	Size   uint64
+}
+
 type Table struct {
 	kv     *kv.KeyValue
 	schema *TableSchema
 	size   uint64
 }
 
-func NewTable(root pager.PagePointer, pageManager *pager.PageManager, schema *TableSchema, size uint64) (*Table, error) {
+func NewTable(config *TableConfig, pageManager *pager.PageManager) (*Table, error) {
 	table := &Table{
-		kv:     kv.NewKeyValue(root, pageManager),
-		schema: schema,
-		size:   size,
+		kv:     kv.NewKeyValue(config.Root, pageManager),
+		schema: config.Schema,
+		size:   config.Size,
 	}
 
 	if err := table.validateTableSchema(); err != nil {

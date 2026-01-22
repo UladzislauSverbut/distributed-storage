@@ -8,9 +8,11 @@ import (
 )
 
 type Transaction struct {
-	id     TransactionID
-	active bool
-	db     *Database
+	id             TransactionID
+	active         bool
+	affectedTables map[string]*Table
+
+	db *Database
 }
 
 func NewTransaction(db *Database, id TransactionID) *Transaction {
@@ -18,6 +20,8 @@ func NewTransaction(db *Database, id TransactionID) *Transaction {
 		id:     id,
 		db:     db,
 		active: true,
+
+		affectedTables: map[string]*Table{},
 	}
 
 	db.transactions[id] = tx
@@ -28,6 +32,25 @@ func NewTransaction(db *Database, id TransactionID) *Transaction {
 func (tx *Transaction) Commit() error {
 	if !tx.active {
 		return fmt.Errorf("Transaction: couldn't commit transaction with id %d because it is not active")
+	}
+
+	for tableName, table := range tx.affectedTables {
+		if tx.db.tables[tableName] != nil && tx.db.tables[tableName].Root == table.Root() {
+			continue
+		}
+
+		stringifiedSchema, _ := json.Marshal(table.schema)
+
+		schemaRecord := vals.NewObject().
+			Set("name", vals.NewString(table.schema.Name)).
+			Set("definition", vals.NewString(string(stringifiedSchema))).
+			Set("root", vals.NewInt(table.kv.Root())).
+			Set("size", vals.NewInt(table.size))
+
+		if err := tx.db.schemas.Upsert(schemaRecord); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("Transaction: couldn't save table %s: %w", tableName, err)
+		}
 	}
 
 	if err := tx.db.SaveChanges(); err != nil {
@@ -52,9 +75,14 @@ func (tx *Transaction) Rollback() {
 }
 
 func (tx *Transaction) Table(tableName string) (*Table, error) {
-	table, exist := tx.db.tables[tableName]
+	if table, exist := tx.affectedTables[tableName]; exist {
+		return table, nil
+	}
 
-	if exist {
+	if config, exist := tx.db.tables[tableName]; exist {
+		table, _ := NewTable(config, tx.db.pageManager)
+
+		tx.affectedTables[tableName] = table
 		return table, nil
 	}
 
@@ -63,7 +91,7 @@ func (tx *Transaction) Table(tableName string) (*Table, error) {
 	record, err := tx.db.schemas.Get(query)
 
 	if err != nil {
-		panic(fmt.Errorf("Transaction: can`t read schema table %w", err))
+		return nil, fmt.Errorf("Transaction: can`t read schema table %w because it's corrupted", err)
 	}
 
 	if record == nil {
@@ -77,16 +105,19 @@ func (tx *Transaction) Table(tableName string) (*Table, error) {
 	size := record.Get("size").(*vals.IntValue[uint64]).Value()
 
 	if err := json.Unmarshal([]byte(definition), tableSchema); err != nil {
-		fmt.Errorf("Transaction: can`t parse broken table schema %w", err)
+		return nil, fmt.Errorf("Transaction: can`t parse broken table schema %w", err)
 	}
 
-	table, err = NewTable(pager.PagePointer(pointer), tx.db.pageManager, tableSchema, size)
-
-	if err != nil {
-		return nil, err
+	config := &TableConfig{
+		Root:   pager.PagePointer(pointer),
+		Schema: tableSchema,
+		Size:   size,
 	}
 
-	tx.db.tables[tableName] = table
+	table, _ := NewTable(config, tx.db.pageManager)
+
+	tx.db.tables[tableName] = config
+	tx.affectedTables[tableName] = table
 
 	return table, nil
 }
@@ -98,25 +129,20 @@ func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because it`s already exist", schema.Name)
 	}
 
-	table, err := NewTable(pager.NULL_PAGE, tx.db.pageManager, schema, 0)
+	config := &TableConfig{
+		Root:   pager.NULL_PAGE,
+		Schema: schema,
+		Size:   0,
+	}
+
+	table, err := NewTable(config, tx.db.pageManager)
 
 	if err != nil {
 		return nil, err
 	}
 
-	stringifiedSchema, _ := json.Marshal(table.schema)
-
-	query := vals.NewObject().
-		Set("name", vals.NewString(table.schema.Name)).
-		Set("definition", vals.NewString(string(stringifiedSchema))).
-		Set("root", vals.NewInt(table.Root())).
-		Set("size", vals.NewInt(table.Size()))
-
-	if err := tx.db.schemas.Insert(query); err != nil {
-		return nil, fmt.Errorf("Transaction: couldn't save table schema %w", err)
-	}
-
-	tx.db.tables[table.schema.Name] = table
+	tx.db.tables[table.schema.Name] = config
+	tx.affectedTables[schema.Name] = table
 
 	return table, nil
 }

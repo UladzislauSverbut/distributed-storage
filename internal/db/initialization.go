@@ -41,12 +41,17 @@ func initializePageManager(config *DatabaseConfig) (*pager.PageManager, error) {
 func initializeSchemaTable(pointer pager.PagePointer, pager *pager.PageManager) *Table {
 	schema := &TableSchema{
 		Name:         "@schemas",
-		ColumnNames:  []string{"name", "definition"},
+		ColumnNames:  []string{"name", "definition", "root", "size"},
 		PrimaryIndex: []string{"name"},
-		ColumnTypes:  map[string]vals.ValueType{"name": vals.TYPE_STRING, "definition": vals.TYPE_STRING},
+		ColumnTypes:  map[string]vals.ValueType{"name": vals.TYPE_STRING, "definition": vals.TYPE_STRING, "root": vals.TYPE_UINT64, "size": vals.TYPE_UINT64},
 	}
 
-	schemaTable, _ := NewTable(pointer, pager, schema, 0)
+	config := &TableConfig{
+		Root:   pointer,
+		Schema: schema,
+	}
+
+	schemaTable, _ := NewTable(config, pager)
 
 	return schemaTable
 }

@@ -18,7 +18,7 @@ type Database struct {
 
 	pageManager *pager.PageManager
 
-	tables       map[string]*Table
+	tables       map[string]*TableConfig
 	transactions map[TransactionID]*Transaction
 }
 
@@ -47,7 +47,7 @@ func NewDatabase(config *DatabaseConfig) (*Database, error) {
 		nextTransactionID: TransactionID(nextTransactionID),
 		pageManager:       pageManager,
 
-		tables:       map[string]*Table{},
+		tables:       map[string]*TableConfig{},
 		transactions: map[TransactionID]*Transaction{},
 	}, nil
 }
@@ -65,7 +65,6 @@ func (db *Database) StartTransaction(request func(*Transaction)) {
 }
 
 func (db *Database) SaveChanges() error {
-
 	if err := db.pageManager.SavePages(); err != nil {
 		return err
 	}
