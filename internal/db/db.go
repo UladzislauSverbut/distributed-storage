@@ -11,14 +11,21 @@ const DEFAULT_DIRECTORY = "/var/lib/kv"
 type DBVersion uint64
 type TransactionID uint64
 
+type TableDescriptor struct {
+	Root   pager.PagePointer
+	Name   string
+	Size   uint64
+	Schema *TableSchema
+}
+
 type Database struct {
 	version           DBVersion
-	schemas           *Table
 	nextTransactionID TransactionID
 
 	pageManager *pager.PageManager
 
-	tables       map[string]*TableConfig
+	schemas      *Table
+	descriptors  map[string]*TableDescriptor
 	transactions map[TransactionID]*Transaction
 }
 
@@ -43,12 +50,11 @@ func NewDatabase(config *DatabaseConfig) (*Database, error) {
 
 	return &Database{
 		version:           DBVersion(version),
-		schemas:           initializeSchemaTable(pager.PagePointer(root), pageManager),
 		nextTransactionID: TransactionID(nextTransactionID),
 		pageManager:       pageManager,
-
-		tables:       map[string]*TableConfig{},
-		transactions: map[TransactionID]*Transaction{},
+		schemas:           initializeSchemaTable(pager.PagePointer(root), pageManager),
+		descriptors:       map[string]*TableDescriptor{},
+		transactions:      map[TransactionID]*Transaction{},
 	}, nil
 }
 

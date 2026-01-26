@@ -31,11 +31,11 @@ func NewTransaction(db *Database, id TransactionID) *Transaction {
 
 func (tx *Transaction) Commit() error {
 	if !tx.active {
-		return fmt.Errorf("Transaction: couldn't commit transaction with id %d because it is not active")
+		return fmt.Errorf("Transaction: couldn't commit transaction with id %d because it is not active", tx.id)
 	}
 
 	for tableName, table := range tx.affectedTables {
-		if tx.db.tables[tableName] != nil && tx.db.tables[tableName].Root == table.Root() {
+		if tx.db.descriptors[tableName] != nil && tx.db.descriptors[tableName].Root == table.Root() {
 			continue
 		}
 
@@ -79,8 +79,11 @@ func (tx *Transaction) Table(tableName string) (*Table, error) {
 		return table, nil
 	}
 
-	if config, exist := tx.db.tables[tableName]; exist {
-		table, _ := NewTable(config, tx.db.pageManager)
+	if descriptor, exist := tx.db.descriptors[tableName]; exist {
+		table, err := NewTable(descriptor.Root, tx.db.pageManager, descriptor.Schema, descriptor.Size)
+		if err != nil {
+			return nil, err
+		}
 
 		tx.affectedTables[tableName] = table
 		return table, nil
@@ -91,57 +94,60 @@ func (tx *Transaction) Table(tableName string) (*Table, error) {
 	record, err := tx.db.schemas.Get(query)
 
 	if err != nil {
-		return nil, fmt.Errorf("Transaction: can`t read schema table %w because it's corrupted", err)
+		return nil, fmt.Errorf("Transaction: can't read schema table: %w", err)
 	}
 
 	if record == nil {
 		return nil, nil
 	}
 
-	tableSchema := &TableSchema{}
-
 	definition := record.Get("definition").(*vals.StringValue).Value()
-	pointer := record.Get("root").(*vals.IntValue[uint64]).Value()
+	root := record.Get("root").(*vals.IntValue[uint64]).Value()
 	size := record.Get("size").(*vals.IntValue[uint64]).Value()
 
-	if err := json.Unmarshal([]byte(definition), tableSchema); err != nil {
-		return nil, fmt.Errorf("Transaction: can`t parse broken table schema %w", err)
+	schema := &TableSchema{}
+
+	if err := json.Unmarshal([]byte(definition), schema); err != nil {
+		return nil, fmt.Errorf("Transaction: can't parse table schema: %w", err)
 	}
 
-	config := &TableConfig{
-		Root:   pager.PagePointer(pointer),
-		Schema: tableSchema,
-		Size:   size,
+	if err != nil {
+		return nil, err
 	}
 
-	table, _ := NewTable(config, tx.db.pageManager)
+	tx.db.descriptors[tableName] = &TableDescriptor{
+	table, err := NewTable(root, tx.db.pageManager, schema, size)
+		Root:   table.Root(),
+		Name:   table.Name(),
+		Size:   table.Size(),
+		Schema: schema,
+	}
 
-	tx.db.tables[tableName] = config
 	tx.affectedTables[tableName] = table
 
 	return table, nil
 }
 
 func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
-	_, exist := tx.db.tables[schema.Name]
+	_, exist := tx.db.descriptors[schema.Name]
 
 	if exist {
-		return nil, fmt.Errorf("Transaction: couldn't create table %s because it`s already exist", schema.Name)
+		return nil, fmt.Errorf("Transaction: couldn't create table %s because it's already exist", schema.Name)
 	}
 
-	config := &TableConfig{
-		Root:   pager.NULL_PAGE,
-		Schema: schema,
-		Size:   0,
-	}
-
-	table, err := NewTable(config, tx.db.pageManager)
+	table, err := NewTable(pager.NULL_PAGE, tx.db.pageManager, schema, 0)
 
 	if err != nil {
 		return nil, err
 	}
 
-	tx.db.tables[table.schema.Name] = config
+	tx.db.descriptors[table.schema.Name] = &TableDescriptor{
+		Root:   table.Root(),
+		Name:   table.Name(),
+		Size:   table.Size(),
+		Schema: schema,
+	}
+
 	tx.affectedTables[schema.Name] = table
 
 	return table, nil

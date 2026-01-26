@@ -28,23 +28,17 @@ type TableSchema struct {
 	ColumnTypes      map[string]vals.ValueType
 }
 
-type TableConfig struct {
-	Root   pager.PagePointer
-	Schema *TableSchema
-	Size   uint64
-}
-
 type Table struct {
 	kv     *kv.KeyValue
 	schema *TableSchema
 	size   uint64
 }
 
-func NewTable(config *TableConfig, pageManager *pager.PageManager) (*Table, error) {
+func NewTable(root pager.PagePointer, pageManager *pager.PageManager, schema *TableSchema, size uint64) (*Table, error) {
 	table := &Table{
-		kv:     kv.NewKeyValue(config.Root, pageManager),
-		schema: config.Schema,
-		size:   config.Size,
+		kv:     kv.NewKeyValue(root, pageManager),
+		schema: schema,
+		size:   size,
 	}
 
 	if err := table.validateTableSchema(); err != nil {
@@ -58,7 +52,7 @@ func (table *Table) Get(query *vals.Object) (*vals.Object, error) {
 	index := table.getPrimaryIndex(query)
 
 	if index == nil {
-		return nil, fmt.Errorf("Table: cant`t find record because one of primary index columns is missed in query %s", query)
+		return nil, fmt.Errorf("Table: can't find record because one of primary index columns is missing in query %s", query)
 	}
 
 	if response, err := table.kv.Get(&kv.GetRequest{Key: index}); err != nil {
@@ -112,7 +106,7 @@ func (table *Table) Delete(query *vals.Object) error {
 	index := table.getPrimaryIndex(query)
 
 	if index == nil {
-		return fmt.Errorf("Table cant`t delete record because one of primary index columns is missed: %s", query)
+		return fmt.Errorf("Table: can't delete record because one of primary index columns is missing: %s", query)
 	}
 
 	_, err := table.kv.Delete(&kv.DeleteRequest{Key: index})
@@ -140,11 +134,15 @@ func (table *Table) Root() pager.PagePointer {
 	return table.kv.Root()
 }
 
+func (table *Table) Name() string {
+	return table.schema.Name
+}
+
 func (table *Table) update(record *vals.Object, mode int8) error {
 	primaryIndex := table.getPrimaryIndex(record)
 
 	if primaryIndex == nil {
-		return fmt.Errorf("Table: cant`t update record because one of primary index columns is missed in record %s", record)
+		return fmt.Errorf("Table: can't update record because one of primary index columns is missing in record %s", record)
 	}
 
 	response, err := table.kv.Get(&kv.GetRequest{Key: primaryIndex})
@@ -154,11 +152,11 @@ func (table *Table) update(record *vals.Object, mode int8) error {
 	}
 
 	if mode == MODE_UPDATE && response.Value == nil {
-		return fmt.Errorf("Table: can`t update record because it`s not exist in record %v", record)
+		return fmt.Errorf("Table: can't update record because it doesn't exist: %v", record)
 	}
 
 	if mode == MODE_INSERT && response.Value != nil {
-		return fmt.Errorf("Table: can`t insert record because it`s exist in record %v", record)
+		return fmt.Errorf("Table: can't insert record because it already exists: %v", record)
 	}
 
 	if _, err := table.kv.Set(&kv.SetRequest{Key: primaryIndex, Value: table.encodePayload(record)}); err != nil {
@@ -407,15 +405,15 @@ func (table *Table) removeEmptyValues(values []vals.Value) []vals.Value {
 
 func (table *Table) validateTableSchema() error {
 	if table.schema.Name == "" {
-		return fmt.Errorf("Transaction: couldn't create table because schema must have a name")
+		return fmt.Errorf("Table: schema must have a name")
 	}
 
 	if len(table.schema.ColumnNames) == 0 {
-		return fmt.Errorf("Transaction: couldn't create table because schema must have at least one column")
+		return fmt.Errorf("Table: schema must have at least one column")
 	}
 
 	if len(table.schema.PrimaryIndex) == 0 {
-		return fmt.Errorf("Transaction: couldn't create table because schema must have a primary index")
+		return fmt.Errorf("Table: schema must have a primary index")
 	}
 
 	return nil
