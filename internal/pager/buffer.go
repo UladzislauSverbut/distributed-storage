@@ -3,6 +3,9 @@ package pager
 import (
 	"encoding/binary"
 	"fmt"
+	"runtime"
+	"sync/atomic"
+	"unsafe"
 )
 
 const HEADER_SIZE = 18 // size of block header in file bytes
@@ -10,26 +13,73 @@ const HEADER_SIZE = 18 // size of block header in file bytes
 /*
    Page Buffer Block Format
 
-   | pages stored in block | total pages in chain | pointer to previous block | pointers to pages in block with their versions |
-   |          2B           |          8B          |             8B            |    			number of pages * 16B    		   |
+   | pages stored in block | pointer to previous block | pointers to pages in block with their versions |
+   |          2B           |             8B            |    			number of pages * 16B    		   |
 */
 
 type PageBuffer struct {
-	head          PagePointer   // pointer to the first block in the buffer
-	reusablePages []PagePointer // pages that can be reused for internal use
-	pageManager   *PageManager
+	head        *PagePointer // pointer to the first block in the buffer
+	pageManager *PageManager
 }
 
-func NewPageBuffer(head PagePointer, pageManager *PageManager) *PageBuffer {
+func NewPageBuffer(head *PagePointer, pageManager *PageManager) *PageBuffer {
 	return &PageBuffer{
-		head:          head,
-		pageManager:   pageManager,
-		reusablePages: make([]PagePointer, 0),
+		head:        head,
+		pageManager: pageManager,
 	}
 }
 
-func (buffer *PageBuffer) pageAt(pageNumber int) PagePointer {
-	pagesBlock := buffer.pageManager.Page(buffer.head)
+func (buffer *PageBuffer) Extract() PagePointer {
+	for {
+		head := atomic.LoadUint64(buffer.head)
+		pagesBlock := buffer.pageManager.Page(head)
+
+		if buffer.blockSize(pagesBlock) == 0 {
+			return NULL_PAGE
+		}
+
+		newHead := buffer.pageAt(pagesBlock, 1)
+		newBlock := buffer.pageManager.Page(newHead)
+
+		// we can fill this node before CAS because other gouroutines will to fill this node with the same data
+		// outside of buffer this node become immutable
+		buffer.initBlock(newBlock, buffer.previousBlock(pagesBlock), buffer.blockPages(pagesBlock, 1, buffer.blockSize(pagesBlock)))
+
+		if atomic.CompareAndSwapUint64(buffer.head, head, uint64(newHead)) {
+			return head
+		}
+
+		runtime.Gosched()
+	}
+}
+
+func (buffer *PageBuffer) Add(pages []PagePointer) {
+	for {
+		head := atomic.LoadUint64(buffer.head)
+		newHead := head
+		addedPages := pages
+
+		for len(addedPages) > 0 {
+			newHead = addedPages[0]
+			addedPages = addedPages[1:]
+
+			newPagesBlock := buffer.pageManager.Page(newHead)
+
+			buffer.initBlock(newPagesBlock, head, addedPages[:min(buffer.blockCapacity(newPagesBlock), len(addedPages))])
+
+			buffer.pageManager.UpdatePage(newHead, newPagesBlock)
+			addedPages = addedPages[min(buffer.blockCapacity(newPagesBlock), len(addedPages)):]
+		}
+
+		if atomic.CompareAndSwapUint64(buffer.head, head, uint64(newHead)) {
+			return
+		}
+
+		runtime.Gosched()
+	}
+}
+
+func (buffer *PageBuffer) pageAt(pagesBlock []byte, pageNumber int) PagePointer {
 
 	for buffer.blockSize(pagesBlock) < pageNumber {
 		pageNumber -= buffer.blockSize(pagesBlock)
@@ -39,112 +89,14 @@ func (buffer *PageBuffer) pageAt(pageNumber int) PagePointer {
 	return buffer.blockPage(pagesBlock, pageNumber)
 }
 
-func (buffer *PageBuffer) applyChanges(removedPagesCount int, addedPages []PagePointer) {
-	pagesBlockPointer := buffer.head
-	pagesBlock := buffer.pageManager.Page(pagesBlockPointer)
-
-	if buffer.blockTotalPages(pagesBlock) < removedPagesCount {
-		panic(fmt.Sprintf("PagePool: not enough pages to remove %d pages", removedPagesCount))
-	}
-
-	if removedPagesCount > 0 {
-		addedPages = append(addedPages, buffer.removePages(removedPagesCount)...)
-	}
-
-	if len(addedPages) > 0 {
-		buffer.addPages(addedPages)
-	}
-}
-
-func (buffer *PageBuffer) removePages(count int) []PagePointer {
-	pagesBlockPointer := buffer.head
-	pagesBlock := buffer.pageManager.Page(pagesBlockPointer)
-	releasedPages := make([]PagePointer, 0)
-
-	for count > buffer.blockSize(pagesBlock) {
-		releasedPages = append(releasedPages, pagesBlockPointer)
-
-		count -= buffer.blockSize(pagesBlock)
-		pagesBlockPointer = buffer.previousBlock(pagesBlock)
-		pagesBlock = buffer.pageManager.Page(pagesBlockPointer)
-	}
-
-	if count != 0 {
-		releasedPages = append(releasedPages, pagesBlockPointer)
-
-		buffer.reusablePages = append(buffer.reusablePages, buffer.blockPages(pagesBlock, count, buffer.blockSize(pagesBlock))...)
-
-		pagesBlockPointer = buffer.previousBlock(pagesBlock)
-
-	}
-
-	buffer.head = pagesBlockPointer
-
-	return releasedPages
-}
-
-func (buffer *PageBuffer) availablePageCount() int {
-	pagesBlock := buffer.pageManager.Page(buffer.head)
-
-	return buffer.blockTotalPages(pagesBlock)
-}
-
-func (buffer *PageBuffer) addPages(pages []PagePointer) {
-	pagesBlockPointer := buffer.head
-	pagesBlock := buffer.pageManager.Page(pagesBlockPointer)
-
-	for len(pages) > 0 {
-		newBlockPointer := NULL_PAGE
-
-		if len(buffer.reusablePages) > 0 {
-			newBlockPointer = buffer.reusablePages[0]
-			buffer.reusablePages = buffer.reusablePages[1:]
-		} else {
-			newBlockPointer = pages[0]
-			pages = pages[1:]
-		}
-
-		newPagesBlock := buffer.pageManager.Page(newBlockPointer)
-
-		if len(pages)+len(buffer.reusablePages) <= buffer.blockCapacity(newPagesBlock) {
-			pages = append(pages, buffer.reusablePages...)
-			buffer.reusablePages = nil
-		}
-
-		buffer.initBlock(newPagesBlock, pagesBlock, pagesBlockPointer, pages[:min(buffer.blockCapacity(newPagesBlock), len(pages))])
-
-		buffer.pageManager.UpdatePage(newBlockPointer, newPagesBlock)
-
-		pages = pages[min(buffer.blockCapacity(newPagesBlock), len(pages)):]
-		pagesBlockPointer = newBlockPointer
-		pagesBlock = newPagesBlock
-
-		if len(pages) == 0 && len(buffer.reusablePages) > 0 {
-			pages = append(pages, buffer.reusablePages[0])
-			buffer.reusablePages = buffer.reusablePages[1:]
-		}
-	}
-
-	buffer.reusablePages = make([]PagePointer, 0)
-	buffer.head = pagesBlockPointer
-}
-
 func (buffer *PageBuffer) blockPage(pagesBlock []byte, pageNumber int) PagePointer {
 	return PagePointer(binary.LittleEndian.Uint64(pagesBlock[HEADER_SIZE+(pageNumber*8):]))
 }
 
 func (buffer *PageBuffer) blockPages(pagesBlock []byte, start int, end int) []PagePointer {
-	pages := make([]PagePointer, 0, end-start)
+	pages := pagesBlock[HEADER_SIZE+(start*8) : HEADER_SIZE+(end*8)]
 
-	for pageNumber := start; pageNumber < end; pageNumber++ {
-		pages = append(pages, buffer.blockPage(pagesBlock, pageNumber))
-	}
-
-	return pages
-}
-
-func (buffer *PageBuffer) blockTotalPages(pagesBlock []byte) int {
-	return int(binary.LittleEndian.Uint64(pagesBlock[2:10]))
+	return unsafe.Slice((*PagePointer)(unsafe.Pointer(&pages[0])), len(pages)/8)
 }
 
 func (buffer *PageBuffer) blockSize(pagesBlock []byte) int {
@@ -159,18 +111,15 @@ func (buffer *PageBuffer) previousBlock(pagesBlock []byte) PagePointer {
 	return PagePointer(binary.LittleEndian.Uint64(pagesBlock[10:]))
 }
 
-func (buffer *PageBuffer) initBlock(pagesBlock []byte, previousBlock []byte, previousBlockPointer PagePointer, storedPages []PagePointer) {
-	storedPagesCount := len(storedPages)
+func (buffer *PageBuffer) initBlock(pagesBlock []byte, previousBlockPointer PagePointer, pagePointers []PagePointer) {
+	storedPagesCount := len(pagePointers)
 
 	if buffer.blockCapacity(pagesBlock) < storedPagesCount {
 		panic(fmt.Sprintf("PageBuffer: not enough space in block to store %d pages", storedPagesCount))
 	}
 
 	binary.LittleEndian.PutUint16(pagesBlock, uint16(storedPagesCount))
-	binary.LittleEndian.PutUint64(pagesBlock[2:], uint64(buffer.blockTotalPages(previousBlock)+storedPagesCount))
-	binary.LittleEndian.PutUint64(pagesBlock[10:], previousBlockPointer)
+	binary.LittleEndian.PutUint64(pagesBlock[2:], uint64(previousBlockPointer))
 
-	for i, pagePointer := range storedPages {
-		binary.LittleEndian.PutUint64(pagesBlock[HEADER_SIZE+(i*8):], pagePointer)
-	}
+	copy(pagesBlock[HEADER_SIZE:], unsafe.Slice((*byte)(unsafe.Pointer(&pagePointers[0])), len(pagePointers)*8))
 }

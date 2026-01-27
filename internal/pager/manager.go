@@ -30,7 +30,7 @@ type PageManagerState struct {
 	allocatedPagesCount int                    // count of pages that were allocated before saving
 	reusedPagesCount    int                    // count of pages that were reused before saving
 	freedPagesCount     int                    // count of pages that were freed before saving
-	pageBuffer          *PageBuffer            //  buffer of available pages
+	pageBuffer          *PageBuffer            // buffer of available pages
 	pageUpdates         map[PagePointer][]byte // map of page updates that will be synced with storage
 }
 
@@ -71,7 +71,6 @@ func NewPageManager(storage store.Storage, pageSize int) (*PageManager, error) {
 		state: PageManagerState{
 			pagesCount:          0,
 			allocatedPagesCount: 0,
-			reusedPagesCount:    0,
 			freedPagesCount:     0,
 			pageBuffer:          nil,
 			pageUpdates:         map[PagePointer][]byte{},
@@ -128,7 +127,7 @@ func (manager *PageManager) Page(pointer PagePointer) []byte {
 }
 
 func (manager *PageManager) CreatePage(data []byte) PagePointer {
-	pagePointer := manager.reusePage()
+	pagePointer := manager.state.pageBuffer.Extract()
 
 	if pagePointer == NULL_PAGE {
 		pagePointer = manager.allocateVirtualPage()
@@ -161,16 +160,6 @@ func (manager *PageManager) SavePages() error {
 	manager.saveMasterPage()
 
 	return nil
-}
-
-func (manager *PageManager) reusePage() PagePointer {
-	if manager.state.reusedPagesCount == manager.state.pageBuffer.availablePageCount() {
-		return NULL_PAGE
-	}
-
-	manager.state.reusedPagesCount++
-
-	return manager.state.pageBuffer.pageAt(manager.state.reusedPagesCount - 1)
 }
 
 func (manager *PageManager) allocateVirtualPage() PagePointer {
@@ -213,7 +202,7 @@ func (manager *PageManager) saveFreedPages() {
 		}
 	}
 
-	manager.state.pageBuffer.applyChanges(manager.state.reusedPagesCount, freedPages)
+	manager.state.pageBuffer.Add(freedPages)
 
 	manager.state.freedPagesCount = 0
 	manager.state.reusedPagesCount = 0
