@@ -3,7 +3,7 @@ package pager
 import (
 	"encoding/binary"
 	"fmt"
-	"runtime"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 )
@@ -20,6 +20,7 @@ const HEADER_SIZE = 18 // size of block header in file bytes
 type PageBuffer struct {
 	head        *PagePointer // pointer to the first block in the buffer
 	pageManager *PageManager
+	mu          sync.Mutex
 }
 
 func NewPageBuffer(head *PagePointer, pageManager *PageManager) *PageBuffer {
@@ -30,53 +31,68 @@ func NewPageBuffer(head *PagePointer, pageManager *PageManager) *PageBuffer {
 }
 
 func (buffer *PageBuffer) Extract() PagePointer {
-	for {
-		head := atomic.LoadUint64(buffer.head)
-		pagesBlock := buffer.pageManager.Page(head)
+	head := atomic.LoadUint64(buffer.head)
 
-		if buffer.blockSize(pagesBlock) == 0 {
-			return NULL_PAGE
-		}
-
-		newHead := buffer.pageAt(pagesBlock, 1)
-		newBlock := buffer.pageManager.Page(newHead)
-
-		// we can fill this node before CAS because other gouroutines will to fill this node with the same data
-		// outside of buffer this node become immutable
-		buffer.initBlock(newBlock, buffer.previousBlock(pagesBlock), buffer.blockPages(pagesBlock, 1, buffer.blockSize(pagesBlock)))
-
-		if atomic.CompareAndSwapUint64(buffer.head, head, uint64(newHead)) {
-			return head
-		}
-
-		runtime.Gosched()
+	if head == NULL_PAGE {
+		return NULL_PAGE
 	}
+
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+
+	head = *buffer.head
+	pagesBlock := buffer.pageManager.Page(head)
+
+	if buffer.blockSize(pagesBlock) == 0 {
+		*buffer.head = NULL_PAGE
+
+		return head
+	}
+
+	newHead := buffer.pageAt(pagesBlock, 1)
+	newBlock := buffer.pageManager.Page(newHead)
+
+	buffer.initBlock(newBlock, buffer.previousBlock(pagesBlock), buffer.blockPages(pagesBlock, 1, buffer.blockSize(pagesBlock)))
+
+	*buffer.head = newHead
+
+	return head
 }
 
 func (buffer *PageBuffer) Add(pages []PagePointer) {
-	for {
-		head := atomic.LoadUint64(buffer.head)
-		newHead := head
-		addedPages := pages
+	newHead, tail := NULL_PAGE, NULL_PAGE
 
-		for len(addedPages) > 0 {
-			newHead = addedPages[0]
-			addedPages = addedPages[1:]
+	for len(pages) > 0 {
+		node := pages[0]
+		pages = pages[1:]
 
-			newPagesBlock := buffer.pageManager.Page(newHead)
+		block := buffer.pageManager.Page(node)
+		capacity := buffer.blockCapacity(block)
 
-			buffer.initBlock(newPagesBlock, head, addedPages[:min(buffer.blockCapacity(newPagesBlock), len(addedPages))])
-
-			buffer.pageManager.UpdatePage(newHead, newPagesBlock)
-			addedPages = addedPages[min(buffer.blockCapacity(newPagesBlock), len(addedPages)):]
+		count := len(pages)
+		if count > capacity {
+			count = capacity
 		}
 
-		if atomic.CompareAndSwapUint64(buffer.head, head, uint64(newHead)) {
-			return
+		buffer.initBlock(block, newHead, pages[:count])
+
+		if tail == NULL_PAGE {
+			tail = node
 		}
 
-		runtime.Gosched()
+		newHead = node
+		pages = pages[count:]
 	}
+
+	if newHead == NULL_PAGE {
+		return
+	}
+
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+
+	buffer.setPreviousBlock(buffer.pageManager.Page(tail), *buffer.head)
+	*buffer.head = newHead
 }
 
 func (buffer *PageBuffer) pageAt(pagesBlock []byte, pageNumber int) PagePointer {
@@ -109,6 +125,10 @@ func (buffer *PageBuffer) blockCapacity(pagesBlock []byte) int {
 
 func (buffer *PageBuffer) previousBlock(pagesBlock []byte) PagePointer {
 	return PagePointer(binary.LittleEndian.Uint64(pagesBlock[10:]))
+}
+
+func (buffer *PageBuffer) setPreviousBlock(pagesBlock []byte, previousBlockPointer PagePointer) {
+	binary.LittleEndian.PutUint64(pagesBlock[2:], uint64(previousBlockPointer))
 }
 
 func (buffer *PageBuffer) initBlock(pagesBlock []byte, previousBlockPointer PagePointer, pagePointers []PagePointer) {
