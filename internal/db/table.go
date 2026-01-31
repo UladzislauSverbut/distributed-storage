@@ -10,15 +10,8 @@ import (
 	"slices"
 )
 
-const (
-	MODE_UPSERT int8 = iota // insert or update record
-	MODE_UPDATE             // update existing record
-	MODE_INSERT             // insert record
-)
-
 const PRIMARY_INDEX_ID int = 0 // primary index id, secondary indexes ids start from 1
-
-const INDEX_ID_SIZE int = 4 // size of index section id in bytes
+const INDEX_ID_SIZE int = 4    // size of index section id in bytes
 
 type TableSchema struct {
 	Name             string
@@ -31,6 +24,7 @@ type TableSchema struct {
 type Table struct {
 	kv     *kv.KeyValue
 	schema *TableSchema
+	events []Event
 	size   uint64
 }
 
@@ -39,6 +33,7 @@ func NewTable(root pager.PagePointer, pageManager *pager.PageManager, schema *Ta
 		kv:     kv.NewKeyValue(root, pageManager),
 		schema: schema,
 		size:   size,
+		events: []Event{},
 	}
 
 	if err := table.validateTableSchema(); err != nil {
@@ -109,21 +104,130 @@ func (table *Table) Delete(query *vals.Object) error {
 		return fmt.Errorf("Table: can't delete record because one of primary index columns is missing: %s", query)
 	}
 
-	_, err := table.kv.Delete(&kv.DeleteRequest{Key: index})
+	if response, err := table.kv.Delete(&kv.DeleteRequest{Key: index}); err != nil {
+		return err
+	} else {
+		table.events = append(table.events, &DeleteEntry{
+			TableName: table.schema.Name,
+			Key:       index,
+			Value:     response.OldValue,
+		})
+	}
 
-	return err
+	return nil
 }
 
 func (table *Table) Insert(record *vals.Object) error {
-	return table.update(record, MODE_INSERT)
+	index := table.getPrimaryIndex(record)
+
+	if index == nil {
+		return fmt.Errorf("Table: can't insert record because one of primary index columns is missing in record %s", record)
+	}
+
+	if response, err := table.kv.Get(&kv.GetRequest{Key: index}); err != nil {
+		return err
+	} else if response.Value != nil {
+		return fmt.Errorf("Table: can't insert record because it already exists: %v", record)
+	}
+
+	value := table.encodePayload(record)
+
+	if _, err := table.kv.Set(&kv.SetRequest{Key: index, Value: value}); err != nil {
+		return err
+	}
+
+	if err := table.createSecondaryIndexes(record); err != nil {
+		return err
+	}
+
+	table.events = append(table.events, &InsertEntry{
+		TableName: table.schema.Name,
+		Key:       index,
+		Value:     value})
+
+	return nil
 }
 
 func (table *Table) Update(record *vals.Object) error {
-	return table.update(record, MODE_UPDATE)
+	index := table.getPrimaryIndex(record)
+
+	if index == nil {
+		return fmt.Errorf("Table: can't update record because one of primary index columns is missing in record %s", record)
+	}
+
+	response, err := table.kv.Get(&kv.GetRequest{Key: index})
+
+	if err != nil {
+		return err
+	}
+
+	if response.Value == nil {
+		return fmt.Errorf("Table: can't update record because it doesn't exist: %v", record)
+	}
+
+	newValue := table.encodePayload(record)
+
+	if _, err := table.kv.Set(&kv.SetRequest{Key: index, Value: newValue}); err != nil {
+		return err
+	}
+
+	if err := table.updateSecondaryIndexes(record, table.decodePayload(response.Value)); err != nil {
+		return err
+	}
+
+	table.events = append(table.events, &UpdateEntry{
+		TableName: table.schema.Name,
+		Key:       index,
+		NewValue:  newValue,
+		OldValue:  response.Value,
+	})
+
+	return nil
 }
 
 func (table *Table) Upsert(record *vals.Object) error {
-	return table.update(record, MODE_UPSERT)
+	index := table.getPrimaryIndex(record)
+
+	if index == nil {
+		return fmt.Errorf("Table: can't update record because one of primary index columns is missing in record %s", record)
+	}
+
+	response, err := table.kv.Get(&kv.GetRequest{Key: index})
+
+	if err != nil {
+		return err
+	}
+
+	newValue := table.encodePayload(record)
+
+	if _, err := table.kv.Set(&kv.SetRequest{Key: index, Value: newValue}); err != nil {
+		return err
+	}
+
+	if response.Value == nil {
+		if err := table.createSecondaryIndexes(record); err != nil {
+			return err
+		}
+
+		table.events = append(table.events, &InsertEntry{
+			TableName: table.schema.Name,
+			Key:       index,
+			Value:     newValue,
+		})
+	} else {
+		if err := table.updateSecondaryIndexes(record, table.decodePayload(response.Value)); err != nil {
+			return err
+		}
+
+		table.events = append(table.events, &UpdateEntry{
+			TableName: table.schema.Name,
+			Key:       index,
+			NewValue:  newValue,
+			OldValue:  response.Value,
+		})
+	}
+
+	return nil
 }
 
 func (table *Table) Size() uint64 {
@@ -136,40 +240,6 @@ func (table *Table) Root() pager.PagePointer {
 
 func (table *Table) Name() string {
 	return table.schema.Name
-}
-
-func (table *Table) update(record *vals.Object, mode int8) error {
-	primaryIndex := table.getPrimaryIndex(record)
-
-	if primaryIndex == nil {
-		return fmt.Errorf("Table: can't update record because one of primary index columns is missing in record %s", record)
-	}
-
-	response, err := table.kv.Get(&kv.GetRequest{Key: primaryIndex})
-
-	if err != nil {
-		return err
-	}
-
-	if mode == MODE_UPDATE && response.Value == nil {
-		return fmt.Errorf("Table: can't update record because it doesn't exist: %v", record)
-	}
-
-	if mode == MODE_INSERT && response.Value != nil {
-		return fmt.Errorf("Table: can't insert record because it already exists: %v", record)
-	}
-
-	if _, err := table.kv.Set(&kv.SetRequest{Key: primaryIndex, Value: table.encodePayload(record)}); err != nil {
-		return err
-	}
-
-	if response.Value == nil {
-		return table.createSecondaryIndexes(record)
-	} else {
-		oldRecord := table.decodePayload(response.Value)
-		return table.updateSecondaryIndexes(record, oldRecord)
-	}
-
 }
 
 func (table *Table) createSecondaryIndexes(record *vals.Object) error {
