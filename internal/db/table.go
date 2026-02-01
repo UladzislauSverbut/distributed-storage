@@ -230,16 +230,8 @@ func (table *Table) Upsert(record *vals.Object) error {
 	return nil
 }
 
-func (table *Table) Size() uint64 {
-	return table.size
-}
-
 func (table *Table) Root() pager.PagePointer {
 	return table.kv.Root()
-}
-
-func (table *Table) Name() string {
-	return table.schema.Name
 }
 
 func (table *Table) createSecondaryIndexes(record *vals.Object) error {

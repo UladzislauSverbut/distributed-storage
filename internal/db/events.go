@@ -9,7 +9,6 @@ type Event interface {
 const (
 	START_TRANSACTION_EVENT  = "START_TRANSACTION"
 	COMMIT_TRANSACTION_EVENT = "COMMIT_TRANSACTION"
-	ABORT_TRANSACTION_EVENT  = "ABORT_TRANSACTION"
 	CREATE_TABLE_EVENT       = "CREATE_TABLE"
 	DELETE_TABLE_EVENT       = "DELETE_TABLE"
 	UPSERT_ENTRY_EVENT       = "UPSERT_ENTRY"
@@ -33,14 +32,6 @@ type CommitTransaction struct {
 
 func (e *CommitTransaction) EventName() string {
 	return COMMIT_TRANSACTION_EVENT
-}
-
-type AbortTransaction struct {
-	TxID TransactionID
-}
-
-func (e *AbortTransaction) EventName() string {
-	return ABORT_TRANSACTION_EVENT
 }
 
 type CreateTable struct {

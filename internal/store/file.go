@@ -3,12 +3,15 @@ package store
 import (
 	"fmt"
 	"os"
+	"sync"
 )
 
 type FileStorage struct {
 	file          *os.File
 	fileSize      int
 	virtualMemory [][]byte
+
+	mu sync.RWMutex
 }
 
 func NewFileStorage(filePath string) (*FileStorage, error) {
@@ -50,14 +53,26 @@ func NewFileStorage(filePath string) (*FileStorage, error) {
 }
 
 func (storage *FileStorage) Flush() error {
+	storage.mu.RLock()
+	defer storage.mu.RUnlock()
+
 	return storage.file.Sync()
 }
 
 func (storage *FileStorage) Size() int {
+	storage.mu.RLock()
+	defer storage.mu.RUnlock()
+
 	return storage.fileSize
 }
 
 func (storage *FileStorage) IncreaseSize(size int) error {
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
+
+	if size <= storage.fileSize {
+		return nil
+	}
 
 	if err := increaseFileSize(storage.file, int64(size)); err != nil {
 		return fmt.Errorf("FileStorage: failed to increase file size %w", err)
@@ -75,7 +90,10 @@ func (storage *FileStorage) IncreaseSize(size int) error {
 	return nil
 }
 
-func (storage *FileStorage) MemorySegment(size int, offset int) []byte {
+func (storage *FileStorage) MemorySegment(offset int, size int) []byte {
+	storage.mu.RLock()
+	defer storage.mu.RUnlock()
+
 	if size+offset > storage.fileSize {
 		panic(fmt.Sprintf("FileStorage: getting memory segment is out of range %d > %d", size+offset, storage.fileSize))
 	}
@@ -83,7 +101,10 @@ func (storage *FileStorage) MemorySegment(size int, offset int) []byte {
 	return findMemorySegment(storage.virtualMemory, size, offset)
 }
 
-func (storage *FileStorage) UpdateMemorySegment(data []byte, offset int) {
+func (storage *FileStorage) UpdateMemorySegment(offset int, data []byte) {
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
+
 	if len(data)+offset > storage.fileSize {
 		panic(fmt.Sprintf("FileStorage: updating memory segment is out of range %d > %d", len(data)+offset, storage.fileSize))
 	}
@@ -91,12 +112,29 @@ func (storage *FileStorage) UpdateMemorySegment(data []byte, offset int) {
 	writeMemorySegment(storage.virtualMemory, data, offset)
 }
 
-func (storage *FileStorage) SaveMemorySegment(data []byte, offset int) error {
-	if len(data)+offset > storage.fileSize {
-		panic(fmt.Sprintf("FileStorage: flushed memory segment is out of range %d > %d", len(data)+offset, storage.fileSize))
+func (storage *FileStorage) AppendMemorySegment(data []byte) error {
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
+
+	currentSize := storage.fileSize
+	newSize := currentSize + len(data)
+
+	if err := increaseFileSize(storage.file, int64(newSize)); err != nil {
+		return fmt.Errorf("FileStorage: failed to increase file size %w", err)
 	}
 
-	_, err := storage.file.WriteAt(data, int64(offset))
+	newMemoryBlock, err := mapFileToMemory(storage.file, int64(currentSize), len(data))
 
-	return err
+	if err != nil {
+		return fmt.Errorf("FileStorage: failed to map file to memory %w", err)
+	}
+
+	if _, err := storage.file.WriteAt(data, int64(currentSize)); err != nil {
+		return fmt.Errorf("FileStorage: failed to write data to file %w", err)
+	}
+
+	storage.virtualMemory = append(storage.virtualMemory, newMemoryBlock)
+	storage.fileSize = newSize
+
+	return nil
 }

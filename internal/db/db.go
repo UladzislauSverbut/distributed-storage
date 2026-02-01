@@ -2,31 +2,27 @@ package db
 
 import (
 	"distributed-storage/internal/pager"
-	"encoding/binary"
+	"distributed-storage/internal/store"
+	"sync"
 	"sync/atomic"
 )
 
 const DEFAULT_DIRECTORY = "/var/lib/kv"
+const DEFAULT_PAGE_SIZE = 16 * 1024 // 16KB
+const HEADER_SIZE = 24              // bytes
 
-type DBVersion uint64
 type TransactionID uint64
 
-type TableDescriptor struct {
-	Root   pager.PagePointer
-	Name   string
-	Size   uint64
-	Schema *TableSchema
-}
-
 type Database struct {
-	version           DBVersion
+	root              atomic.Uint64
+	storage           store.Storage
+	transactions      map[TransactionID]*Transaction
 	nextTransactionID TransactionID
 
-	pageManager *pager.PageManager
+	wal       *Wal
+	allocator *pager.PageAllocator
 
-	schemas      *Table
-	descriptors  map[string]*TableDescriptor
-	transactions map[TransactionID]*Transaction
+	mu sync.RWMutex
 }
 
 type DatabaseConfig struct {
@@ -36,52 +32,51 @@ type DatabaseConfig struct {
 }
 
 func NewDatabase(config *DatabaseConfig) (*Database, error) {
-	pageManager, err := initializePageManager(config)
+	if config.Directory == "" {
+		config.Directory = DEFAULT_DIRECTORY
+	}
+
+	if config.PageSize == 0 {
+		config.PageSize = DEFAULT_PAGE_SIZE
+	}
+
+	walStorage, dbStorage, err := setupStorage(config)
 
 	if err != nil {
 		return nil, err
 	}
 
-	header := pageManager.Header()
+	rootPage, nextTransactionID, pagesCount := parseHeader(dbStorage.MemorySegment(0, HEADER_SIZE))
 
-	root := binary.LittleEndian.Uint64(header[:8])
-	version := binary.LittleEndian.Uint64(header[8:16])
-	nextTransactionID := binary.LittleEndian.Uint64(header[16:24])
+	db := &Database{
+		root:              atomic.Uint64{},
+		storage:           dbStorage,
+		transactions:      make(map[TransactionID]*Transaction),
+		nextTransactionID: nextTransactionID,
 
-	return &Database{
-		version:           DBVersion(version),
-		nextTransactionID: TransactionID(nextTransactionID),
-		pageManager:       pageManager,
-		schemas:           initializeSchemaTable(pager.PagePointer(root), pageManager),
-		descriptors:       map[string]*TableDescriptor{},
-		transactions:      map[TransactionID]*Transaction{},
-	}, nil
+		wal:       NewWal(walStorage),
+		allocator: pager.NewPageAllocator(pagesCount),
+	}
+
+	db.root.Store(uint64(rootPage))
+
+	return db, nil
 }
 
-func (db *Database) StartTransaction(request func(*Transaction)) {
-	transactionId := atomic.AddUint64((*uint64)(&db.nextTransactionID), 1)
+func (db *Database) StartTransaction(request func(*Transaction)) error {
+	transaction, err := NewTransaction(db)
 
-	transaction := NewTransaction(db, TransactionID(transactionId))
-
-	db.transactions[TransactionID(transactionId)] = transaction
-
-	request(transaction)
-
-	transaction.Commit()
-}
-
-func (db *Database) SaveChanges() error {
-	if err := db.pageManager.SavePages(); err != nil {
+	if err != nil {
 		return err
 	}
 
-	db.version++
-
-	header := db.pageManager.Header()
-
-	binary.LittleEndian.PutUint64(header[:8], uint64(db.schemas.Root()))
-	binary.LittleEndian.PutUint64(header[8:16], uint64(db.version))
-	binary.LittleEndian.PutUint64(header[16:24], uint64(db.nextTransactionID))
-
-	return db.pageManager.SaveHeader(header)
+	for {
+		request(transaction)
+		if err := transaction.Commit(); err != nil {
+			if err == ErrTransactionConflict {
+				continue
+			}
+			return err
+		}
+	}
 }
