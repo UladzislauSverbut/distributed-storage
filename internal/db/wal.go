@@ -1,7 +1,9 @@
 package db
 
 import (
+	"distributed-storage/internal/helpers"
 	"distributed-storage/internal/store"
+	"fmt"
 )
 
 type Wal struct {
@@ -15,6 +17,36 @@ func NewWal(storage store.Storage) *Wal {
 }
 
 func (wal *Wal) Write(events []Event) error {
-	// Implementation for writing events to the WAL
-	return nil
+	log := []byte{}
+	for _, event := range events {
+		serializedEvent := wal.serializeEvent(event)
+		log = append(log, serializedEvent...)
+	}
+
+	return wal.storage.AppendMemorySegment(log)
+}
+
+func (wal *Wal) serializeEvent(event Event) []byte {
+	switch e := event.(type) {
+	case *StartTransaction:
+		return []byte(e.Name() + "(TX=" + string(e.TxID) + ")\n")
+	case *CommitTransaction:
+		return []byte(e.Name() + "(TX=" + string(e.TxID) + ")\n")
+	case *CreateTable:
+		return []byte(e.Name() + "(TABLE=" + e.TableName + ")\n")
+	case *DeleteTable:
+		return []byte(e.Name() + "(TABLE=" + e.TableName + ")\n")
+	case *UpsertEntry:
+		return []byte(e.Name() + "(TABLE=" + e.TableName + ",KEY=" + string(e.Key) + ",VALUE=" + string(e.NewValue) + ")\n")
+	case *DeleteEntry:
+		return []byte(e.Name() + "(TABLE=" + e.TableName + ",KEY=" + string(e.Key) + ")\n")
+	case *UpdateEntry:
+		return []byte(e.Name() + "(TABLE=" + e.TableName + ",KEY=" + string(e.Key) + ",NEW_VALUE=" + string(e.NewValue) + ")\n")
+	case *InsertEntry:
+		return []byte(e.Name() + "(TABLE=" + e.TableName + ",KEY=" + string(e.Key) + ",VALUE=" + string(e.Value) + ")\n")
+	case *FreePages:
+		return []byte(e.Name() + "(PAGES=" + helpers.StringifySlice(e.Pages, ",") + ")\n")
+	default:
+		panic(fmt.Sprintf("Wal: unknown event type %s", event.Name()))
+	}
 }

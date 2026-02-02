@@ -5,6 +5,7 @@ import (
 	"distributed-storage/internal/store"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const DEFAULT_DIRECTORY = "/var/lib/kv"
@@ -19,6 +20,7 @@ type Database struct {
 	transactions      map[TransactionID]*Transaction
 	nextTransactionID TransactionID
 
+	config    *DatabaseConfig
 	wal       *Wal
 	allocator *pager.PageAllocator
 
@@ -54,11 +56,14 @@ func NewDatabase(config *DatabaseConfig) (*Database, error) {
 		transactions:      make(map[TransactionID]*Transaction),
 		nextTransactionID: nextTransactionID,
 
+		config:    config,
 		wal:       NewWal(walStorage),
 		allocator: pager.NewPageAllocator(pagesCount),
 	}
 
 	db.root.Store(uint64(rootPage))
+
+	go db.sync()
 
 	return db, nil
 }
@@ -78,5 +83,29 @@ func (db *Database) StartTransaction(request func(*Transaction)) error {
 			}
 			return err
 		}
+
+		return nil
+	}
+}
+
+func (db *Database) sync() {
+	for {
+		db.mu.Lock()
+
+		for txID, tx := range db.transactions {
+			if !tx.active {
+				delete(db.transactions, txID)
+			}
+		}
+
+		root := db.root.Load()
+		pagesCount := db.allocator.Count()
+		nextTxID := db.nextTransactionID
+
+		db.storage.UpdateMemorySegment(0, buildHeader(pager.PagePointer(root), nextTxID, pagesCount))
+
+		db.mu.Unlock()
+
+		time.Sleep(1 * time.Second)
 	}
 }

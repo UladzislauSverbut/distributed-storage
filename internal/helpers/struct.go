@@ -1,6 +1,4 @@
-package pager
-
-import "unsafe"
+package helpers
 
 type Set[T comparable] struct {
 	elements map[T]struct{}
@@ -54,13 +52,4 @@ func (set Set[T]) Values() []T {
 	}
 
 	return values
-}
-
-func copySlice[T comparable](src []T) []T {
-	sliceLength := len(src)
-
-	dst := make([]T, sliceLength)
-
-	copy(unsafe.Slice(&dst[0], sliceLength), unsafe.Slice(&src[0], sliceLength))
-	return dst
 }

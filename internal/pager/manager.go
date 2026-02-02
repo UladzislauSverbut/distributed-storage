@@ -1,9 +1,9 @@
 package pager
 
 import (
+	"distributed-storage/internal/helpers"
 	"distributed-storage/internal/store"
 	"errors"
-	"math"
 )
 
 const NULL_PAGE = PagePointer(0)
@@ -22,10 +22,10 @@ type PageManagerConfig struct {
 }
 
 type PageManagerState struct {
-	AllocatedPages Set[PagePointer]       // set of pages that were given by allocator
-	AvailablePages Set[PagePointer]       // set of pages that are available for usage
-	ReleasedPages  Set[PagePointer]       // set of pages that were released and cannot be used until commit
-	pageUpdates    map[PagePointer][]byte // map of page updates that will be synced with storage
+	AllocatedPages helpers.Set[PagePointer] // set of pages that were given by allocator
+	AvailablePages helpers.Set[PagePointer] // set of pages that are available for usage
+	ReleasedPages  helpers.Set[PagePointer] // set of pages that were released and cannot be used until commit
+	pageUpdates    map[PagePointer][]byte   // map of page updates that will be synced with storage
 }
 
 const SIGNATURE = "PAGE_MANAGER_SIG"
@@ -37,14 +37,6 @@ func NewPageManager(storage store.Storage, allocator *PageAllocator, pageSize in
 		return nil, errors.New("PageManager: support only storage with size of multiple pages")
 	}
 
-	if storageSize == 0 {
-		storageSize = pageSize * 10
-
-		if err := storage.IncreaseSize(storageSize); err != nil {
-			return nil, err
-		}
-	}
-
 	manager := &PageManager{
 		storage:   storage,
 		allocator: allocator,
@@ -52,9 +44,9 @@ func NewPageManager(storage store.Storage, allocator *PageAllocator, pageSize in
 			pageSize: pageSize,
 		},
 		state: PageManagerState{
-			AllocatedPages: NewSet[PagePointer](),
-			AvailablePages: NewSet[PagePointer](),
-			ReleasedPages:  NewSet[PagePointer](),
+			AllocatedPages: helpers.NewSet[PagePointer](),
+			AvailablePages: helpers.NewSet[PagePointer](),
+			ReleasedPages:  helpers.NewSet[PagePointer](),
 			pageUpdates:    map[PagePointer][]byte{},
 		},
 	}
@@ -99,7 +91,7 @@ func (manager *PageManager) FreePage(pointer PagePointer) {
 	delete(manager.state.pageUpdates, pointer)
 }
 
-func (manager *PageManager) SavePages() error {
+func (manager *PageManager) WritePages() error {
 	for pointer, page := range manager.state.pageUpdates {
 		if page != nil {
 			manager.storage.UpdateMemorySegment(int(pointer)*manager.config.pageSize, page[0:manager.config.pageSize])
@@ -107,26 +99,5 @@ func (manager *PageManager) SavePages() error {
 		}
 	}
 
-	return nil
-}
-
-func (manager *PageManager) extendStorage(desireNumberOfPages int) error {
-	storagePages := manager.storage.Size() / manager.config.pageSize
-
-	if storagePages >= desireNumberOfPages {
-		return nil
-	}
-
-	for storagePages < desireNumberOfPages {
-		incrementPages := int(math.Ceil(float64(desireNumberOfPages) / 8))
-		storagePages += incrementPages
-	}
-
-	storageSize := storagePages * manager.config.pageSize
-
-	if err := manager.storage.IncreaseSize(storageSize); err != nil {
-		return err
-	}
-
-	return nil
+	return manager.storage.Flush()
 }

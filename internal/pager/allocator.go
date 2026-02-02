@@ -1,6 +1,7 @@
 package pager
 
 import (
+	"distributed-storage/internal/helpers"
 	"sync"
 	"sync/atomic"
 )
@@ -14,7 +15,7 @@ type PageBlock struct {
 
 type PageAllocator struct {
 	head       atomic.Pointer[PageBlock]
-	pagesCount uint64
+	pagesCount atomic.Uint64
 
 	pool sync.Pool
 }
@@ -22,7 +23,7 @@ type PageAllocator struct {
 func NewPageAllocator(pagesCount uint64) *PageAllocator {
 	allocator := &PageAllocator{
 		head:       atomic.Pointer[PageBlock]{},
-		pagesCount: pagesCount,
+		pagesCount: atomic.Uint64{},
 
 		pool: sync.Pool{
 			New: func() any {
@@ -43,11 +44,13 @@ func NewPageAllocator(pagesCount uint64) *PageAllocator {
 		totalSize: 0,
 	})
 
+	allocator.pagesCount.Store(pagesCount)
+
 	return allocator
 }
 
 func (allocator *PageAllocator) Free(pages []PagePointer) {
-	pages = copySlice(pages)
+	pages = helpers.CopySlice(pages)
 
 	for {
 		head := allocator.head.Load()
@@ -66,12 +69,16 @@ func (allocator *PageAllocator) Free(pages []PagePointer) {
 	}
 }
 
+func (allocator *PageAllocator) Count() uint64 {
+	return allocator.pagesCount.Load()
+}
+
 func (allocator *PageAllocator) Get() PagePointer {
 	if pointer := allocator.reuse(); pointer != NULL_PAGE {
 		return pointer
 	}
 
-	return PagePointer(atomic.AddUint64(&allocator.pagesCount, 1))
+	return PagePointer(allocator.pagesCount.Add(1))
 }
 
 func (allocator *PageAllocator) reuse() PagePointer {

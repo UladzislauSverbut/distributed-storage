@@ -3,7 +3,7 @@ package db
 import "distributed-storage/internal/pager"
 
 type Event interface {
-	EventName() string
+	Name() string
 }
 
 const (
@@ -22,7 +22,7 @@ type StartTransaction struct {
 	TxID TransactionID
 }
 
-func (e *StartTransaction) EventName() string {
+func (e *StartTransaction) Name() string {
 	return START_TRANSACTION_EVENT
 }
 
@@ -30,7 +30,7 @@ type CommitTransaction struct {
 	TxID TransactionID
 }
 
-func (e *CommitTransaction) EventName() string {
+func (e *CommitTransaction) Name() string {
 	return COMMIT_TRANSACTION_EVENT
 }
 
@@ -39,7 +39,7 @@ type CreateTable struct {
 	Schema    []byte
 }
 
-func (e *CreateTable) EventName() string {
+func (e *CreateTable) Name() string {
 	return CREATE_TABLE_EVENT
 }
 
@@ -48,7 +48,7 @@ type DeleteTable struct {
 	TableRoot pager.PagePointer
 }
 
-func (e *DeleteTable) EventName() string {
+func (e *DeleteTable) Name() string {
 	return DELETE_TABLE_EVENT
 }
 
@@ -58,7 +58,7 @@ type DeleteEntry struct {
 	Value     []byte
 }
 
-func (e *DeleteEntry) EventName() string {
+func (e *DeleteEntry) Name() string {
 	return DELETE_ENTRY_EVENT
 }
 
@@ -69,7 +69,7 @@ type UpdateEntry struct {
 	OldValue  []byte
 }
 
-func (e *UpdateEntry) EventName() string {
+func (e *UpdateEntry) Name() string {
 	return UPDATE_ENTRY_EVENT
 }
 
@@ -80,7 +80,7 @@ type UpsertEntry struct {
 	OldValue  []byte
 }
 
-func (e *UpsertEntry) EventName() string {
+func (e *UpsertEntry) Name() string {
 	return UPSERT_ENTRY_EVENT
 }
 
@@ -90,7 +90,7 @@ type InsertEntry struct {
 	Value     []byte
 }
 
-func (e *InsertEntry) EventName() string {
+func (e *InsertEntry) Name() string {
 	return INSERT_ENTRY_EVENT
 }
 
@@ -99,6 +99,6 @@ type FreePages struct {
 	Pages []pager.PagePointer
 }
 
-func (e *FreePages) EventName() string {
+func (e *FreePages) Name() string {
 	return FREE_PAGES_EVENT
 }

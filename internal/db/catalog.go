@@ -52,6 +52,10 @@ func (catalog *Catalog) getTable(name string) (*TableDescriptor, error) {
 		return nil, fmt.Errorf("Catalog: can't read table schema: %w", err)
 	}
 
+	if record == nil {
+		return nil, nil
+	}
+
 	definition := record.Get("definition").(*vals.StringValue).Value()
 	root := record.Get("root").(*vals.IntValue[uint64]).Value()
 	size := record.Get("size").(*vals.IntValue[uint64]).Value()

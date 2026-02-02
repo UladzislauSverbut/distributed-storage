@@ -1,6 +1,6 @@
 package store
 
-func findMemorySegment(segments [][]byte, size int, offset int) []byte {
+func findMemorySegment(segments [][]byte, offset int, size int) []byte {
 	block := make([]byte, size)
 	blockStart := 0
 
@@ -25,7 +25,7 @@ func findMemorySegment(segments [][]byte, size int, offset int) []byte {
 	return block
 }
 
-func writeMemorySegment(segments [][]byte, data []byte, offset int) {
+func writeMemorySegment(segments [][]byte, offset int, data []byte) {
 	for _, segment := range segments {
 		if offset >= 0 && offset < len(segment) {
 			blockEnd := min(len(data), len(segment)-offset)

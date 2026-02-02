@@ -2,9 +2,12 @@ package db
 
 import (
 	"distributed-storage/internal/pager"
+	"errors"
 	"fmt"
 	"sync/atomic"
 )
+
+var ErrTransactionConflict = errors.New("Transaction: couldn't commit transaction because root page was modified by another transaction")
 
 type Transaction struct {
 	id             TransactionID
@@ -19,7 +22,7 @@ type Transaction struct {
 
 func NewTransaction(db *Database) (*Transaction, error) {
 	root := db.root.Load()
-	pageManager, err := pager.NewPageManager(db.storage, db.allocator, 0)
+	pageManager, err := pager.NewPageManager(db.storage, db.allocator, db.config.PageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -71,17 +74,15 @@ func (tx *Transaction) Commit() (err error) {
 		return err
 	}
 
-	if err := tx.pageManager.SavePages(); err != nil {
+	if err := tx.pageManager.WritePages(); err != nil {
 		return err
 	}
 
 	if ok := tx.db.root.CompareAndSwap(tx.root, tx.catalog.Root()); !ok {
-		return fmt.Errorf("Transaction: couldn't commit transaction with id %d because of concurrent update", tx.id)
+		return ErrTransactionConflict
 	}
 
 	tx.active = false
-
-	delete(tx.db.transactions, tx.id)
 
 	return nil
 }
@@ -90,6 +91,9 @@ func (tx *Transaction) Rollback() {
 	if !tx.active {
 		return
 	}
+
+	tx.resetTableChanges()
+	tx.active = false
 
 	delete(tx.db.transactions, tx.id)
 }
@@ -120,12 +124,12 @@ func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because it's already exist", schema.Name)
 	}
 
-	table, err := NewTable(tx.db.allocator.Get(), tx.pageManager, schema, 0)
+	table, err := NewTable(pager.NULL_PAGE, tx.pageManager, schema, 0)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := tx.catalog.updateTable(schema.Name, &TableDescriptor{root: table.Root(), name: schema.Name, schema: schema, size: 0}); err != nil {
+	if err := tx.catalog.updateTable(schema.Name, &TableDescriptor{root: table.Root(), name: table.schema.Name, schema: schema, size: 0}); err != nil {
 		return nil, err
 	}
 

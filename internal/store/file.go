@@ -2,19 +2,20 @@ package store
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"sync"
 )
 
 type FileStorage struct {
-	file          *os.File
-	fileSize      int
-	virtualMemory [][]byte
+	file   *os.File
+	size   int
+	memory [][]byte
 
 	mu sync.RWMutex
 }
 
-func NewFileStorage(filePath string) (*FileStorage, error) {
+func NewFileStorage(filePath string, initialSize int) (*FileStorage, error) {
 	var file *os.File
 	var err error
 
@@ -36,25 +37,32 @@ func NewFileStorage(filePath string) (*FileStorage, error) {
 
 	fileSize := int(fileStat.Size())
 	virtualMemory := [][]byte{}
-
-	if fileSize > 0 {
-		if segment, err := mapFileToMemory(file, 0, fileSize); err != nil {
-			return nil, err
-		} else {
-			virtualMemory = [][]byte{segment}
-		}
+	storage := &FileStorage{
+		file:   file,
+		size:   fileSize,
+		memory: virtualMemory,
 	}
 
-	return &FileStorage{
-		file:          file,
-		fileSize:      fileSize,
-		virtualMemory: virtualMemory,
-	}, nil
+	if storage.size > 0 {
+		chunk, err := mapFileToMemory(file, 0, fileSize)
+
+		if err != nil {
+			return nil, err
+		}
+
+		storage.memory = append(storage.memory, chunk)
+	}
+
+	if err := storage.increaseSize(initialSize); err != nil {
+		return nil, err
+	}
+
+	return storage, nil
 }
 
 func (storage *FileStorage) Flush() error {
-	storage.mu.RLock()
-	defer storage.mu.RUnlock()
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
 
 	return storage.file.Sync()
 }
@@ -63,78 +71,72 @@ func (storage *FileStorage) Size() int {
 	storage.mu.RLock()
 	defer storage.mu.RUnlock()
 
-	return storage.fileSize
-}
-
-func (storage *FileStorage) IncreaseSize(size int) error {
-	storage.mu.Lock()
-	defer storage.mu.Unlock()
-
-	if size <= storage.fileSize {
-		return nil
-	}
-
-	if err := increaseFileSize(storage.file, int64(size)); err != nil {
-		return fmt.Errorf("FileStorage: failed to increase file size %w", err)
-	}
-
-	newMemoryBlock, err := mapFileToMemory(storage.file, int64(storage.fileSize), size-storage.fileSize)
-
-	if err != nil {
-		return fmt.Errorf("FileStorage: failed to map file to memory %w", err)
-	}
-
-	storage.virtualMemory = append(storage.virtualMemory, newMemoryBlock)
-	storage.fileSize = size
-
-	return nil
+	return storage.size
 }
 
 func (storage *FileStorage) MemorySegment(offset int, size int) []byte {
 	storage.mu.RLock()
 	defer storage.mu.RUnlock()
 
-	if size+offset > storage.fileSize {
-		panic(fmt.Sprintf("FileStorage: getting memory segment is out of range %d > %d", size+offset, storage.fileSize))
+	if storage.size < offset+size {
+		panic(fmt.Sprintf("FileStorage: getting memory segment is out of range %d > %d", size+offset, storage.size))
 	}
 
-	return findMemorySegment(storage.virtualMemory, size, offset)
+	return findMemorySegment(storage.memory, offset, size)
 }
 
-func (storage *FileStorage) UpdateMemorySegment(offset int, data []byte) {
+func (storage *FileStorage) UpdateMemorySegment(offset int, data []byte) error {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
-	if len(data)+offset > storage.fileSize {
-		panic(fmt.Sprintf("FileStorage: updating memory segment is out of range %d > %d", len(data)+offset, storage.fileSize))
+	expectedSize := offset + len(data)
+
+	if expectedSize > storage.size {
+		if err := storage.increaseSize(expectedSize); err != nil {
+			return err
+		}
 	}
 
-	writeMemorySegment(storage.virtualMemory, data, offset)
+	writeMemorySegment(storage.memory, offset, data)
+
+	return nil
 }
 
 func (storage *FileStorage) AppendMemorySegment(data []byte) error {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
-	currentSize := storage.fileSize
-	newSize := currentSize + len(data)
+	previousSize := storage.size
+	expectedSize := previousSize + len(data)
 
-	if err := increaseFileSize(storage.file, int64(newSize)); err != nil {
+	if err := storage.increaseSize(expectedSize); err != nil {
 		return fmt.Errorf("FileStorage: failed to increase file size %w", err)
 	}
 
-	newMemoryBlock, err := mapFileToMemory(storage.file, int64(currentSize), len(data))
+	if _, err := storage.file.WriteAt(data, int64(previousSize)); err != nil {
+		return fmt.Errorf("FileStorage: failed to write data to file %w", err)
+	}
 
+	return nil
+}
+
+func (storage *FileStorage) increaseSize(desiredSize int) error {
+	if desiredSize <= storage.size {
+		return nil
+	}
+
+	totalSize := int(math.Max(float64(desiredSize), float64(storage.size)*1.25))
+	if err := increaseFileSize(storage.file, int64(totalSize)); err != nil {
+		return fmt.Errorf("FileStorage: failed to increase file size %w", err)
+	}
+
+	newMemoryBlock, err := mapFileToMemory(storage.file, int64(storage.size), totalSize-storage.size)
 	if err != nil {
 		return fmt.Errorf("FileStorage: failed to map file to memory %w", err)
 	}
 
-	if _, err := storage.file.WriteAt(data, int64(currentSize)); err != nil {
-		return fmt.Errorf("FileStorage: failed to write data to file %w", err)
-	}
-
-	storage.virtualMemory = append(storage.virtualMemory, newMemoryBlock)
-	storage.fileSize = newSize
+	storage.memory = append(storage.memory, newMemoryBlock)
+	storage.size = totalSize
 
 	return nil
 }

@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"math"
 	"sync"
 )
 
@@ -30,20 +31,6 @@ func (storage *MemoryStorage) Size() int {
 	return storage.size
 }
 
-func (storage *MemoryStorage) IncreaseSize(size int) error {
-	storage.mu.Lock()
-	defer storage.mu.Unlock()
-
-	if size <= storage.size {
-		return nil
-	}
-
-	storage.memory = append(storage.memory, make([]byte, size-storage.size))
-	storage.size = size
-
-	return nil
-}
-
 func (storage *MemoryStorage) MemorySegment(offset int, size int) []byte {
 
 	storage.mu.RLock()
@@ -53,26 +40,40 @@ func (storage *MemoryStorage) MemorySegment(offset int, size int) []byte {
 		panic(fmt.Sprintf("MemoryStorage: getting memory segment is out of range %d > %d", size+offset, storage.size))
 	}
 
-	return findMemorySegment(storage.memory, size, offset)
+	return findMemorySegment(storage.memory, offset, size)
 }
 
-func (storage *MemoryStorage) UpdateMemorySegment(offset int, data []byte) {
+func (storage *MemoryStorage) UpdateMemorySegment(offset int, data []byte) error {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
 	if len(data)+offset > storage.size {
-		panic(fmt.Sprintf("MemoryStorage: updating memory segment is out of range %d > %d", len(data)+offset, storage.size))
+		storage.increaseSize(len(data) + offset + offset)
 	}
 
-	writeMemorySegment(storage.memory, data, offset)
+	writeMemorySegment(storage.memory, offset, data)
+	return nil
 }
 
-func (storage *MemoryStorage) AppendMemorySegment(offset int, data []byte) error {
+func (storage *MemoryStorage) AppendMemorySegment(data []byte) error {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
-	storage.memory = append(storage.memory, data)
-	storage.size = storage.size + len(data)
+	previousSize := storage.size
+	storage.increaseSize(storage.size + len(data))
+
+	writeMemorySegment(storage.memory, previousSize, data)
 
 	return nil
+}
+
+func (storage *MemoryStorage) increaseSize(desiredSize int) {
+	if desiredSize <= storage.size {
+		return
+	}
+
+	totalSize := int(math.Max(float64(desiredSize), float64(storage.size)*1.25))
+
+	storage.memory = append(storage.memory, make([]byte, totalSize-storage.size))
+	storage.size = totalSize
 }
