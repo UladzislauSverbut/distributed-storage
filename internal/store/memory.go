@@ -1,6 +1,7 @@
 package store
 
 import (
+	"distributed-storage/internal/helpers"
 	"fmt"
 	"math"
 	"sync"
@@ -40,7 +41,7 @@ func (storage *MemoryStorage) MemorySegment(offset int, size int) []byte {
 		panic(fmt.Sprintf("MemoryStorage: getting memory segment is out of range %d > %d", size+offset, storage.size))
 	}
 
-	return findMemorySegment(storage.memory, offset, size)
+	return helpers.SubSlice(storage.memory, offset, size)
 }
 
 func (storage *MemoryStorage) UpdateMemorySegment(offset int, data []byte) error {
@@ -51,7 +52,7 @@ func (storage *MemoryStorage) UpdateMemorySegment(offset int, data []byte) error
 		storage.increaseSize(len(data) + offset + offset)
 	}
 
-	writeMemorySegment(storage.memory, offset, data)
+	helpers.UpdateSubslice(storage.memory, offset, data)
 	return nil
 }
 
@@ -62,7 +63,7 @@ func (storage *MemoryStorage) AppendMemorySegment(data []byte) error {
 	previousSize := storage.size
 	storage.increaseSize(storage.size + len(data))
 
-	writeMemorySegment(storage.memory, previousSize, data)
+	helpers.UpdateSubslice(storage.memory, previousSize, data)
 
 	return nil
 }

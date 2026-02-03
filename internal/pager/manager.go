@@ -3,7 +3,6 @@ package pager
 import (
 	"distributed-storage/internal/helpers"
 	"distributed-storage/internal/store"
-	"errors"
 )
 
 const NULL_PAGE = PagePointer(0)
@@ -31,12 +30,6 @@ type PageManagerState struct {
 const SIGNATURE = "PAGE_MANAGER_SIG"
 
 func NewPageManager(storage store.Storage, allocator *PageAllocator, pageSize int) (*PageManager, error) {
-	storageSize := storage.Size()
-
-	if storageSize > 0 && storageSize%pageSize != 0 {
-		return nil, errors.New("PageManager: support only storage with size of multiple pages")
-	}
-
 	manager := &PageManager{
 		storage:   storage,
 		allocator: allocator,

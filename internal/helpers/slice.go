@@ -11,11 +11,11 @@ func CopySlice[T comparable](src []T) []T {
 	return dst
 }
 
-func StringifySlice[T comparable](src []T, separator string) string {
+func StringifySlice[T comparable](src []T, stringifier func(T) string, separator string) string {
 	str := ""
 
 	for idx, elem := range src {
-		str += string(rune(unsafe.Sizeof(elem)))
+		str += stringifier(elem)
 
 		if idx < len(src)-1 {
 			str += separator
@@ -23,4 +23,49 @@ func StringifySlice[T comparable](src []T, separator string) string {
 	}
 
 	return str
+}
+
+func SubSlice[T comparable](segments [][]T, offset int, size int) []T {
+	block := make([]T, size)
+	blockStart := 0
+
+	for _, segment := range segments {
+		if offset < 0 {
+			break
+		}
+
+		if offset >= len(segment) {
+			offset -= len(segment)
+			continue
+		}
+
+		blockEnd := min(size-blockStart, len(segment)-offset)
+
+		copy(block[blockStart:blockStart+blockEnd], segment[offset:offset+blockEnd])
+
+		blockStart += blockEnd
+		offset -= blockStart
+	}
+
+	return block
+}
+
+func UpdateSubslice[T comparable](segments [][]T, offset int, data []T) {
+	for _, segment := range segments {
+		if offset >= 0 && offset < len(segment) {
+			blockEnd := min(len(data), len(segment)-offset)
+
+			copy(segment[offset:offset+blockEnd], data[:blockEnd])
+
+			if blockEnd == len(data) {
+				return
+			}
+
+			data = data[blockEnd:]
+			offset = 0
+		} else {
+			offset -= len(segment)
+			continue
+		}
+	}
 }

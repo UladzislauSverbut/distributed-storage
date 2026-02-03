@@ -4,6 +4,7 @@ import (
 	"distributed-storage/internal/helpers"
 	"distributed-storage/internal/store"
 	"fmt"
+	"strconv"
 )
 
 type Wal struct {
@@ -29,9 +30,9 @@ func (wal *Wal) Write(events []Event) error {
 func (wal *Wal) serializeEvent(event Event) []byte {
 	switch e := event.(type) {
 	case *StartTransaction:
-		return []byte(e.Name() + "(TX=" + string(e.TxID) + ")\n")
+		return []byte(e.Name() + "(TX=" + strconv.FormatUint(uint64(e.TxID), 10) + ")\n")
 	case *CommitTransaction:
-		return []byte(e.Name() + "(TX=" + string(e.TxID) + ")\n")
+		return []byte(e.Name() + "(TX=" + strconv.FormatUint(uint64(e.TxID), 10) + ")\n")
 	case *CreateTable:
 		return []byte(e.Name() + "(TABLE=" + e.TableName + ")\n")
 	case *DeleteTable:
@@ -45,7 +46,7 @@ func (wal *Wal) serializeEvent(event Event) []byte {
 	case *InsertEntry:
 		return []byte(e.Name() + "(TABLE=" + e.TableName + ",KEY=" + string(e.Key) + ",VALUE=" + string(e.Value) + ")\n")
 	case *FreePages:
-		return []byte(e.Name() + "(PAGES=" + helpers.StringifySlice(e.Pages, ",") + ")\n")
+		return []byte(e.Name() + "(PAGES=" + helpers.StringifySlice(e.Pages, func(page uint64) string { return strconv.FormatUint(page, 10) }, ",") + ")\n")
 	default:
 		panic(fmt.Sprintf("Wal: unknown event type %s", event.Name()))
 	}

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"distributed-storage/internal/helpers"
 	"fmt"
 	"math"
 	"os"
@@ -82,7 +83,7 @@ func (storage *FileStorage) MemorySegment(offset int, size int) []byte {
 		panic(fmt.Sprintf("FileStorage: getting memory segment is out of range %d > %d", size+offset, storage.size))
 	}
 
-	return findMemorySegment(storage.memory, offset, size)
+	return helpers.SubSlice(storage.memory, offset, size)
 }
 
 func (storage *FileStorage) UpdateMemorySegment(offset int, data []byte) error {
@@ -97,7 +98,7 @@ func (storage *FileStorage) UpdateMemorySegment(offset int, data []byte) error {
 		}
 	}
 
-	writeMemorySegment(storage.memory, offset, data)
+	helpers.UpdateSubslice(storage.memory, offset, data)
 
 	return nil
 }
@@ -110,7 +111,7 @@ func (storage *FileStorage) AppendMemorySegment(data []byte) error {
 	expectedSize := previousSize + len(data)
 
 	if err := storage.increaseSize(expectedSize); err != nil {
-		return fmt.Errorf("FileStorage: failed to increase file size %w", err)
+		return fmt.Errorf("FileStorage: append file size %w", err)
 	}
 
 	if _, err := storage.file.WriteAt(data, int64(previousSize)); err != nil {
@@ -121,16 +122,20 @@ func (storage *FileStorage) AppendMemorySegment(data []byte) error {
 }
 
 func (storage *FileStorage) increaseSize(desiredSize int) error {
+	var err error
+
 	if desiredSize <= storage.size {
 		return nil
 	}
 
+	oldSize := storage.size
 	totalSize := int(math.Max(float64(desiredSize), float64(storage.size)*1.25))
-	if err := increaseFileSize(storage.file, int64(totalSize)); err != nil {
+
+	if totalSize, err = increaseFileSize(storage.file, totalSize); err != nil {
 		return fmt.Errorf("FileStorage: failed to increase file size %w", err)
 	}
 
-	newMemoryBlock, err := mapFileToMemory(storage.file, int64(storage.size), totalSize-storage.size)
+	newMemoryBlock, err := mapFileToMemory(storage.file, int64(oldSize), totalSize-oldSize)
 	if err != nil {
 		return fmt.Errorf("FileStorage: failed to map file to memory %w", err)
 	}

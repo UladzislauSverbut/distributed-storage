@@ -2,7 +2,6 @@ package pager
 
 import (
 	"distributed-storage/internal/helpers"
-	"sync"
 	"sync/atomic"
 )
 
@@ -16,25 +15,12 @@ type PageBlock struct {
 type PageAllocator struct {
 	head       atomic.Pointer[PageBlock]
 	pagesCount atomic.Uint64
-
-	pool sync.Pool
 }
 
 func NewPageAllocator(pagesCount uint64) *PageAllocator {
 	allocator := &PageAllocator{
 		head:       atomic.Pointer[PageBlock]{},
 		pagesCount: atomic.Uint64{},
-
-		pool: sync.Pool{
-			New: func() any {
-				return &PageBlock{
-					pages:     make([]PagePointer, 0),
-					previous:  nil,
-					blockSize: 0,
-					totalSize: 0,
-				}
-			},
-		},
 	}
 
 	allocator.head.Store(&PageBlock{
@@ -51,11 +37,11 @@ func NewPageAllocator(pagesCount uint64) *PageAllocator {
 
 func (allocator *PageAllocator) Free(pages []PagePointer) {
 	pages = helpers.CopySlice(pages)
+	newHead := &PageBlock{}
 
 	for {
 		head := allocator.head.Load()
 
-		newHead := allocator.pool.Get().(*PageBlock)
 		newHead.pages = pages
 		newHead.previous = head
 		newHead.blockSize = len(pages)
@@ -64,8 +50,6 @@ func (allocator *PageAllocator) Free(pages []PagePointer) {
 		if allocator.head.CompareAndSwap(head, newHead) {
 			return
 		}
-
-		allocator.pool.Put(newHead)
 	}
 }
 
@@ -84,26 +68,25 @@ func (allocator *PageAllocator) Get() PagePointer {
 func (allocator *PageAllocator) reuse() PagePointer {
 	for {
 		head := allocator.head.Load()
+		newHead := &PageBlock{}
+		if head.totalSize == 0 {
 
-		switch head.totalSize {
-		case 0:
 			return NULL_PAGE
-		case 1:
+		}
+
+		if head.blockSize == 1 {
 			if allocator.head.CompareAndSwap(head, head.previous) {
 				return head.pages[0]
 			}
-		default:
-			newHead := allocator.pool.Get().(*PageBlock)
+		} else {
 			newHead.pages = head.pages[:head.blockSize-1]
-			newHead.previous = head.previous
 			newHead.blockSize = head.blockSize - 1
 			newHead.totalSize = head.totalSize - 1
+			newHead.previous = head.previous
 
 			if allocator.head.CompareAndSwap(head, newHead) {
 				return head.pages[head.blockSize-1]
 			}
-
-			allocator.pool.Put(newHead)
 		}
 	}
 }

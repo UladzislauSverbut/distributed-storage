@@ -94,8 +94,6 @@ func (tx *Transaction) Rollback() {
 
 	tx.resetTableChanges()
 	tx.active = false
-
-	delete(tx.db.transactions, tx.id)
 }
 
 func (tx *Transaction) Table(tableName string) (*Table, error) {
