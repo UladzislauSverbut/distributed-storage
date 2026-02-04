@@ -56,7 +56,7 @@ func (manager *PageManager) Page(pointer PagePointer) []byte {
 		return page
 	}
 
-	return manager.storage.MemorySegment(manager.config.pageSize, int(pointer)*manager.config.pageSize)
+	return manager.storage.MemorySegment(int(pointer)*manager.config.pageSize, manager.config.pageSize)
 }
 
 func (manager *PageManager) CreatePage(data []byte) PagePointer {
@@ -84,13 +84,11 @@ func (manager *PageManager) FreePage(pointer PagePointer) {
 	delete(manager.state.pageUpdates, pointer)
 }
 
-func (manager *PageManager) WritePages() error {
+func (manager *PageManager) Save() {
 	for pointer, page := range manager.state.pageUpdates {
 		if page != nil {
 			manager.storage.UpdateMemorySegment(int(pointer)*manager.config.pageSize, page[0:manager.config.pageSize])
 			delete(manager.state.pageUpdates, pointer)
 		}
 	}
-
-	return manager.storage.Flush()
 }

@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"distributed-storage/internal/events"
 	"distributed-storage/internal/kv"
 	"distributed-storage/internal/pager"
 	"distributed-storage/internal/vals"
@@ -29,8 +30,9 @@ type Table struct {
 }
 
 func NewTable(root pager.PagePointer, pageManager *pager.PageManager, schema *TableSchema, size uint64) (*Table, error) {
+	kv := kv.NewKeyValue(root, pageManager)
 	table := &Table{
-		kv:     kv.NewKeyValue(root, pageManager),
+		kv:     kv,
 		schema: schema,
 		size:   size,
 		events: []Event{},
@@ -107,7 +109,7 @@ func (table *Table) Delete(query *vals.Object) error {
 	if response, err := table.kv.Delete(&kv.DeleteRequest{Key: index}); err != nil {
 		return err
 	} else {
-		table.events = append(table.events, &DeleteEntry{
+		table.events = append(table.events, &events.DeleteEntry{
 			TableName: table.schema.Name,
 			Key:       index,
 			Value:     response.OldValue,
@@ -140,7 +142,7 @@ func (table *Table) Insert(record *vals.Object) error {
 		return err
 	}
 
-	table.events = append(table.events, &InsertEntry{
+	table.events = append(table.events, &events.InsertEntry{
 		TableName: table.schema.Name,
 		Key:       index,
 		Value:     value})
@@ -175,7 +177,7 @@ func (table *Table) Update(record *vals.Object) error {
 		return err
 	}
 
-	table.events = append(table.events, &UpdateEntry{
+	table.events = append(table.events, &events.UpdateEntry{
 		TableName: table.schema.Name,
 		Key:       index,
 		NewValue:  newValue,
@@ -209,7 +211,7 @@ func (table *Table) Upsert(record *vals.Object) error {
 			return err
 		}
 
-		table.events = append(table.events, &InsertEntry{
+		table.events = append(table.events, &events.InsertEntry{
 			TableName: table.schema.Name,
 			Key:       index,
 			Value:     newValue,
@@ -219,7 +221,7 @@ func (table *Table) Upsert(record *vals.Object) error {
 			return err
 		}
 
-		table.events = append(table.events, &UpdateEntry{
+		table.events = append(table.events, &events.UpdateEntry{
 			TableName: table.schema.Name,
 			Key:       index,
 			NewValue:  newValue,
@@ -232,6 +234,22 @@ func (table *Table) Upsert(record *vals.Object) error {
 
 func (table *Table) Root() pager.PagePointer {
 	return table.kv.Root()
+}
+
+func (table *Table) Name() string {
+	return table.schema.Name
+}
+
+func (table *Table) Schema() *TableSchema {
+	return table.schema
+}
+
+func (table *Table) Size() uint64 {
+	return table.size
+}
+
+func (table *Table) Events() []Event {
+	return table.events
 }
 
 func (table *Table) createSecondaryIndexes(record *vals.Object) error {

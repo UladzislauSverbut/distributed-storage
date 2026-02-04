@@ -3,6 +3,11 @@ package helpers
 import "unsafe"
 
 func CopySlice[T comparable](src []T) []T {
+
+	if len(src) == 0 {
+		return []T{}
+	}
+
 	sliceLength := len(src)
 
 	dst := make([]T, sliceLength)

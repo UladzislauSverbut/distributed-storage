@@ -1,27 +1,51 @@
 package db
 
 import (
+	"context"
+	"distributed-storage/internal/events"
 	"distributed-storage/internal/pager"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"sync/atomic"
 )
 
-var ErrTransactionConflict = errors.New("Transaction: couldn't commit transaction because root page was modified by another transaction")
+type TransactionID uint64
+
+type TransactionState int
+type TransactionCommitRequest struct {
+	Id             TransactionID
+	Reads          []Event
+	Writes         []Event
+	AllocatedPages []pager.PagePointer
+	Response       chan<- TransactionCommitResponse
+}
+
+type TransactionCommitResponse struct {
+	Success bool
+	Error   error
+}
 
 type Transaction struct {
 	id             TransactionID
-	root           pager.PagePointer
-	active         bool
+	state          TransactionState
 	catalog        *Catalog
 	pageManager    *pager.PageManager
 	affectedTables map[string]*Table
+	events         []Event
 
-	db *Database
+	commitQueue chan<- TransactionCommitRequest
+	ctx         context.Context
 }
 
-func NewTransaction(db *Database) (*Transaction, error) {
-	root := db.root.Load()
+const (
+	ACTIVE TransactionState = iota
+	COMMITTING
+	COMMITTED
+	ABORTED
+)
+
+func NewTransaction(db *Database, ctx context.Context) (*Transaction, error) {
+	root := db.catalog.Root()
 	pageManager, err := pager.NewPageManager(db.storage, db.allocator, db.config.PageSize)
 	if err != nil {
 		return nil, err
@@ -35,12 +59,13 @@ func NewTransaction(db *Database) (*Transaction, error) {
 	tx := &Transaction{
 		id: TransactionID(atomic.AddUint64((*uint64)(&db.nextTransactionID), 1)),
 
-		active:         true,
+		state:          ACTIVE,
 		catalog:        catalog,
 		pageManager:    pageManager,
 		affectedTables: map[string]*Table{},
 
-		db: db,
+		commitQueue: db.commitQueue,
+		ctx:         ctx,
 	}
 
 	db.mu.Lock()
@@ -56,44 +81,50 @@ func (tx *Transaction) Commit() (err error) {
 		if panic := recover(); panic != nil {
 			err = fmt.Errorf("Transaction: panic during commit: %v", panic)
 		}
-		if err != nil {
-			tx.Rollback()
-		}
+
+		// in any case we reset transaction changes once it is finished in any state
+		tx.Rollback()
 	}()
 
-	if !tx.active {
+	if !tx.markCommitting() {
 		return fmt.Errorf("Transaction: couldn't commit transaction with id %d because it is not active", tx.id)
 	}
 
-	events, err := tx.saveTableChanges()
-	if err != nil {
-		return err
+	reads, writes := tx.collectEvents()
+
+	// if there is nothing to write, than just return
+	if len(writes) == 0 {
+		tx.markCommitted()
+		return nil
 	}
 
-	if err := tx.db.wal.Write(events); err != nil {
-		return err
+	// create channel to get response from db writer
+	responseChannel := make(chan TransactionCommitResponse, 1)
+
+	tx.commitQueue <- TransactionCommitRequest{
+		Id:       tx.id,
+		Writes:   writes,
+		Reads:    reads,
+		Response: responseChannel,
 	}
 
-	if err := tx.pageManager.WritePages(); err != nil {
-		return err
+	select {
+	case response := <-responseChannel:
+		if response.Success {
+			tx.markCommitted()
+			return nil
+		} else {
+			tx.markAborted()
+			return response.Error
+		}
+	case <-tx.ctx.Done():
+		tx.markAborted()
+		return fmt.Errorf("Transaction: commit transaction with id %d cancelled by context", tx.id)
 	}
-
-	if ok := tx.db.root.CompareAndSwap(tx.root, tx.catalog.Root()); !ok {
-		return ErrTransactionConflict
-	}
-
-	tx.active = false
-
-	return nil
 }
 
 func (tx *Transaction) Rollback() {
-	if !tx.active {
-		return
-	}
-
-	tx.resetTableChanges()
-	tx.active = false
+	tx.markAborted()
 }
 
 func (tx *Transaction) Table(tableName string) (*Table, error) {
@@ -101,14 +132,9 @@ func (tx *Transaction) Table(tableName string) (*Table, error) {
 		return table, nil
 	}
 
-	descriptor, err := tx.catalog.getTable(tableName)
+	table, err := tx.catalog.GetTable(tableName)
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't get table %s: %w", tableName, err)
-	}
-
-	table, err := NewTable(descriptor.root, tx.pageManager, descriptor.schema, descriptor.size)
-	if err != nil {
-		return nil, fmt.Errorf("Transaction: couldn't initialize table %s: %w", tableName, err)
 	}
 
 	tx.affectedTables[tableName] = table
@@ -117,53 +143,72 @@ func (tx *Transaction) Table(tableName string) (*Table, error) {
 }
 
 func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
-	descriptor, _ := tx.catalog.getTable(schema.Name)
-	if descriptor != nil {
-		return nil, fmt.Errorf("Transaction: couldn't create table %s because it's already exist", schema.Name)
-	}
-
-	table, err := NewTable(pager.NULL_PAGE, tx.pageManager, schema, 0)
+	table, err := tx.catalog.GetTable(schema.Name)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Transaction: couldn't create table %s because of error during getting table: %w", schema.Name, err)
 	}
 
-	if err := tx.catalog.updateTable(schema.Name, &TableDescriptor{root: table.Root(), name: table.schema.Name, schema: schema, size: 0}); err != nil {
-		return nil, err
+	if table != nil {
+		return nil, fmt.Errorf("Transaction: couldn't create table %s because it already exist", schema.Name)
+	}
+
+	table, err = tx.catalog.CreateTable(schema)
+	if err != nil {
+		return nil, fmt.Errorf("Transaction: couldn't create table %s because of error during creating table: %w", schema.Name, err)
 	}
 
 	tx.affectedTables[schema.Name] = table
+	stringifiedSchema, _ := json.Marshal(schema)
+
+	tx.events = append(tx.events, &events.CreateTable{
+		TableName: table.Name(),
+		Schema:    stringifiedSchema,
+	})
 
 	return table, nil
 }
 
-func (tx *Transaction) saveTableChanges() ([]Event, error) {
-	events := []Event{&StartTransaction{TxID: tx.id}}
+func (tx *Transaction) markCommitting() bool {
+	if tx.state != ACTIVE {
+		return false
+	}
 
-	for name, table := range tx.affectedTables {
+	tx.state = COMMITTING
+	return true
+}
+
+func (tx *Transaction) markCommitted() bool {
+	if tx.state != COMMITTING {
+		return false
+	}
+
+	tx.state = COMMITTED
+	return true
+}
+
+func (tx *Transaction) markAborted() bool {
+	if tx.state != COMMITTING {
+		return false
+	}
+
+	tx.state = ABORTED
+	return true
+}
+
+func (tx *Transaction) collectEvents() (reads []Event, writes []Event) {
+	writes = tx.events
+
+	for _, table := range tx.affectedTables {
 		// if table doesn't have events than table was not modified
 		if len(table.events) == 0 {
 			continue
 		}
-
-		if err := tx.catalog.updateTable(name, &TableDescriptor{root: table.Root(), name: name, schema: table.schema, size: table.size}); err != nil {
-			return nil, err
-		}
-
-		events = append(events, table.events...)
+		writes = append(writes, table.events...)
 	}
 
-	if len(events) == 1 {
-		// nothing to commit
-		return nil, nil
-	}
-
-	return append(events,
-		&FreePages{TxID: tx.id, Pages: tx.pageManager.State().ReleasedPages.Values()},
-		&CommitTransaction{TxID: tx.id},
-	), nil
-
+	return
 }
 
-func (tx *Transaction) resetTableChanges() {
-	tx.db.allocator.Free(tx.pageManager.State().AllocatedPages.Values())
-}
+// func (tx *Transaction) resetChanges() {
+// 	tx.allocator.Free(tx.pageManager.State().AllocatedPages.Values())
+// }

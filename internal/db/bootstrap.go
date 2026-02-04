@@ -7,14 +7,14 @@ import (
 )
 
 func setupStorage(config *DatabaseConfig) (walStorage, dbStorage store.Storage, err error) {
-	if walStorage, err = store.NewFileStorage(config.Directory+"/wal.log", config.PageSize*100); err != nil {
+	if walStorage, err = store.NewFileStorage(config.Directory+"/wal.log", config.PageSize*10); err != nil {
 		return
 	}
 
 	if config.InMemory {
 		dbStorage = store.NewMemoryStorage()
 	} else {
-		dbStorage, err = store.NewFileStorage(config.Directory+"/data.db", config.PageSize*100)
+		dbStorage, err = store.NewFileStorage(config.Directory+"/data.db", config.PageSize*10)
 	}
 
 	return
