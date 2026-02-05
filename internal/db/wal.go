@@ -2,6 +2,7 @@ package db
 
 import (
 	"distributed-storage/internal/store"
+	"fmt"
 )
 
 type Wal struct {
@@ -20,5 +21,13 @@ func (wal *Wal) Write(events []Event) error {
 		log = append(log, event.Serialize()...)
 	}
 
-	return wal.storage.AppendMemorySegment(log)
+	if err := wal.storage.AppendMemorySegment(log); err != nil {
+		return fmt.Errorf("Wal: failed to write WAL segment %w", err)
+	}
+
+	if err := wal.storage.Flush(); err != nil {
+		return fmt.Errorf("Wal: failed to flush WAL segment %w", err)
+	}
+
+	return nil
 }

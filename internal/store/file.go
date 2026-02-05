@@ -11,6 +11,7 @@ import (
 type FileStorage struct {
 	file   *os.File
 	size   int
+	offset int
 	memory [][]byte
 
 	mu sync.RWMutex
@@ -41,6 +42,7 @@ func NewFileStorage(filePath string, initialSize int) (*FileStorage, error) {
 	storage := &FileStorage{
 		file:   file,
 		size:   fileSize,
+		offset: 0,
 		memory: virtualMemory,
 	}
 
@@ -54,7 +56,7 @@ func NewFileStorage(filePath string, initialSize int) (*FileStorage, error) {
 		storage.memory = append(storage.memory, chunk)
 	}
 
-	if err := storage.increaseSize(initialSize); err != nil {
+	if err := storage.ensureSize(initialSize); err != nil {
 		return nil, err
 	}
 
@@ -83,7 +85,7 @@ func (storage *FileStorage) MemorySegment(offset int, size int) []byte {
 		panic(fmt.Sprintf("FileStorage: getting memory segment is out of range %d > %d", size+offset, storage.size))
 	}
 
-	return helpers.SubSlice(storage.memory, offset, size)
+	return helpers.ReadSegments(storage.memory, offset, size)
 }
 
 func (storage *FileStorage) UpdateMemorySegment(offset int, data []byte) error {
@@ -92,13 +94,11 @@ func (storage *FileStorage) UpdateMemorySegment(offset int, data []byte) error {
 
 	expectedSize := offset + len(data)
 
-	if expectedSize > storage.size {
-		if err := storage.increaseSize(expectedSize); err != nil {
-			return err
-		}
+	if err := storage.ensureSize(expectedSize); err != nil {
+		return err
 	}
 
-	helpers.UpdateSubslice(storage.memory, offset, data)
+	helpers.FillSegments(storage.memory, offset, data)
 
 	return nil
 }
@@ -107,21 +107,20 @@ func (storage *FileStorage) AppendMemorySegment(data []byte) error {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
-	previousSize := storage.size
-	expectedSize := previousSize + len(data)
+	expectedSize := storage.offset + len(data)
 
-	if err := storage.increaseSize(expectedSize); err != nil {
+	if err := storage.ensureSize(expectedSize); err != nil {
 		return fmt.Errorf("FileStorage: append file size %w", err)
 	}
 
-	if _, err := storage.file.WriteAt(data, int64(previousSize)); err != nil {
-		return fmt.Errorf("FileStorage: failed to write data to file %w", err)
-	}
+	helpers.FillSegments(storage.memory, storage.offset, data)
+
+	storage.offset += len(data)
 
 	return nil
 }
 
-func (storage *FileStorage) increaseSize(desiredSize int) error {
+func (storage *FileStorage) ensureSize(desiredSize int) error {
 	var err error
 
 	if desiredSize <= storage.size {

@@ -30,7 +30,7 @@ func StringifySlice[T comparable](src []T, stringifier func(T) string, separator
 	return str
 }
 
-func SubSlice[T comparable](segments [][]T, offset int, size int) []T {
+func ReadSegments[T comparable](segments [][]T, offset int, size int) []T {
 	block := make([]T, size)
 	blockStart := 0
 
@@ -55,7 +55,7 @@ func SubSlice[T comparable](segments [][]T, offset int, size int) []T {
 	return block
 }
 
-func UpdateSubslice[T comparable](segments [][]T, offset int, data []T) {
+func FillSegments[T comparable](segments [][]T, offset int, data []T) {
 	for _, segment := range segments {
 		if offset >= 0 && offset < len(segment) {
 			blockEnd := min(len(data), len(segment)-offset)

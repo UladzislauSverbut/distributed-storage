@@ -9,6 +9,7 @@ import (
 
 type MemoryStorage struct {
 	size   int
+	offset int
 	memory [][]byte
 
 	mu sync.RWMutex
@@ -18,6 +19,7 @@ func NewMemoryStorage() *MemoryStorage {
 	return &MemoryStorage{
 		memory: [][]byte{},
 		size:   0,
+		offset: 0,
 	}
 }
 
@@ -41,18 +43,16 @@ func (storage *MemoryStorage) MemorySegment(offset int, size int) []byte {
 		panic(fmt.Sprintf("MemoryStorage: getting memory segment is out of range %d > %d", size+offset, storage.size))
 	}
 
-	return helpers.SubSlice(storage.memory, offset, size)
+	return helpers.ReadSegments(storage.memory, offset, size)
 }
 
 func (storage *MemoryStorage) UpdateMemorySegment(offset int, data []byte) error {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
-	if len(data)+offset > storage.size {
-		storage.increaseSize(len(data) + offset + offset)
-	}
+	storage.ensureSize(offset + len(data))
 
-	helpers.UpdateSubslice(storage.memory, offset, data)
+	helpers.FillSegments(storage.memory, offset, data)
 	return nil
 }
 
@@ -60,15 +60,16 @@ func (storage *MemoryStorage) AppendMemorySegment(data []byte) error {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
-	previousSize := storage.size
-	storage.increaseSize(storage.size + len(data))
+	storage.ensureSize(storage.offset + len(data))
 
-	helpers.UpdateSubslice(storage.memory, previousSize, data)
+	helpers.FillSegments(storage.memory, storage.offset, data)
+
+	storage.offset += len(data)
 
 	return nil
 }
 
-func (storage *MemoryStorage) increaseSize(desiredSize int) {
+func (storage *MemoryStorage) ensureSize(desiredSize int) {
 	if desiredSize <= storage.size {
 		return
 	}

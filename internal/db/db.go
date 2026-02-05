@@ -172,9 +172,7 @@ func (db *Database) processCommits(commits []TransactionCommitRequest) {
 
 }
 
-// applyEvent applies a single WAL event to the in-memory catalog/tables.
-// All db-specific logic lives here so that events package stays decoupled
-// and contains only plain data+serialization.
+// Move all this logic to a separate files to avoid circular imports between db and events packages
 func applyEvent(catalog *Catalog, ev Event) error {
 	switch e := ev.(type) {
 	case *events.CreateTable:
