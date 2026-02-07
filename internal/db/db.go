@@ -1,13 +1,10 @@
 package db
 
 import (
-	"bytes"
 	"context"
 	"distributed-storage/internal/events"
-	"distributed-storage/internal/kv"
 	"distributed-storage/internal/pager"
 	"distributed-storage/internal/store"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -19,7 +16,7 @@ const HEADER_SIZE = 24
 
 // bytes
 const NUMBER_OF_PARALLEL_TRANSACTIONS = 1024 // max number of parallel transactions
-const COMMIT_BATCH_SIZE = 16                 // number of transactions to commit in a single batch
+const COMMIT_BATCH_SIZE = 64                 // number of transactions to commit in a single batch
 
 const TRANSACTION_TIMEOUT = 30 * time.Second
 const COMMIT_INTERVAL = 10 * time.Millisecond
@@ -91,9 +88,10 @@ func NewDatabase(config *DatabaseConfig) (*Database, error) {
 }
 
 func (db *Database) StartTransaction(request func(*Transaction)) error {
-	context, _ := context.WithTimeout(context.Background(), TRANSACTION_TIMEOUT)
-	transaction, err := NewTransaction(db, context)
+	ctx, cancel := context.WithTimeout(context.Background(), TRANSACTION_TIMEOUT)
+	defer cancel()
 
+	transaction, err := NewTransaction(db, ctx)
 	if err != nil {
 		return err
 	}
@@ -139,142 +137,36 @@ func (db *Database) processCommits(commits []TransactionCommitRequest) {
 	approvedCommits := make([]TransactionCommitRequest, 0)
 
 	for _, commit := range commits {
-		for _, event := range commit.Writes {
-			if err := applyEvent(db.catalog, event); err != nil {
-				abortedCommits = append(abortedCommits, commit)
-				break
-			}
+		if err := db.catalog.ApplyChangeEvents(commit.ChangeEvents); err != nil {
+			abortedCommits = append(abortedCommits, commit)
+		} else {
+			approvedCommits = append(approvedCommits, commit)
 		}
-
-		approvedCommits = append(approvedCommits, commit)
 	}
 
-	walEvents := make([]events.Event, 0)
+	eventsToLog := make([]TableEvent, 0)
 
 	for _, commit := range approvedCommits {
-		walEvents = append(walEvents, &events.StartTransaction{TxID: events.TxID(commit.Id)})
-		walEvents = append(walEvents, commit.Writes...)
-		walEvents = append(walEvents, &events.CommitTransaction{TxID: events.TxID(commit.Id)})
+		eventsToLog = append(eventsToLog, &events.StartTransaction{ID: uint64(commit.TransactionID)})
+		eventsToLog = append(eventsToLog, commit.ChangeEvents...)
+		eventsToLog = append(eventsToLog, &events.CommitTransaction{ID: uint64(commit.TransactionID)})
 	}
 
-	if err := db.wal.Write(walEvents); err != nil {
+	if err := db.wal.Write(eventsToLog); err != nil {
 		db.abortCommits(commits, fmt.Errorf("WAL write failed: %w", err))
 		return
 	}
 
-	db.catalog.Save()
-	db.catalog.pageManager.Save()
+	if err := db.catalog.PersistTables(); err != nil {
+		db.abortCommits(commits, fmt.Errorf("Catalog persist failed: %w", err))
+		return
+	}
 
 	db.approveCommits(approvedCommits)
+
 	db.storage.UpdateMemorySegment(0, buildHeader(db.catalog.Root(), db.nextTransactionID, db.allocator.Count()))
 
 	db.storage.Flush()
-
-}
-
-// Move all this logic to a separate files to avoid circular imports between db and events packages
-func applyEvent(catalog *Catalog, ev Event) error {
-	switch e := ev.(type) {
-	case *events.CreateTable:
-		var schema TableSchema
-		if err := json.Unmarshal(e.Schema, &schema); err != nil {
-			return fmt.Errorf("CreateTable Apply: can't parse schema: %w", err)
-		}
-
-		// Check if table already exists
-		table, err := catalog.GetTable(e.TableName)
-		if err != nil {
-			return fmt.Errorf("CreateTable Apply: %w", err)
-		}
-
-		if table != nil {
-			return fmt.Errorf("CreateTable Apply: couldn't create table %s because it already exists", e.TableName)
-		}
-
-		if _, err := catalog.CreateTable(&schema); err != nil {
-			return fmt.Errorf("CreateTable Apply: %w", err)
-		}
-		return nil
-
-	case *events.DeleteTable:
-		table, err := catalog.GetTable(e.TableName)
-		if err != nil {
-			return fmt.Errorf("DeleteTable Apply: %w", err)
-		}
-		if table == nil {
-			return fmt.Errorf("DeleteTable Apply: table %s not found", e.TableName)
-		}
-		if err := catalog.DeleteTable(e.TableName); err != nil {
-			return fmt.Errorf("DeleteTable Apply: %w", err)
-		}
-		return nil
-
-	case *events.DeleteEntry:
-		table, err := catalog.GetTable(e.TableName)
-		if err != nil {
-			return fmt.Errorf("DeleteEntry Apply: %w", err)
-		}
-		if table == nil {
-			return fmt.Errorf("DeleteEntry Apply: table %s not found", e.TableName)
-		}
-		response, err := table.kv.Delete(&kv.DeleteRequest{Key: e.Key})
-		if err != nil {
-			return fmt.Errorf("DeleteEntry Apply: %w", err)
-		}
-		if !bytes.Equal(response.OldValue, e.Value) {
-			return fmt.Errorf("DeleteEntry Apply: old value does not match expected value")
-		}
-		return nil
-
-	case *events.UpdateEntry:
-		table, err := catalog.GetTable(e.TableName)
-		if err != nil {
-			return fmt.Errorf("UpdateEntry Apply: %w", err)
-		}
-		if table == nil {
-			return fmt.Errorf("UpdateEntry Apply: table %s not found", e.TableName)
-		}
-		response, err := table.kv.Set(&kv.SetRequest{Key: e.Key, Value: e.NewValue})
-		if err != nil {
-			return fmt.Errorf("UpdateEntry Apply: %w", err)
-		}
-		if !bytes.Equal(response.OldValue, e.OldValue) {
-			return fmt.Errorf("UpdateEntry Apply: old value does not match expected value")
-		}
-		return nil
-
-	case *events.InsertEntry:
-		table, err := catalog.GetTable(e.TableName)
-		if err != nil {
-			return fmt.Errorf("InsertEntry Apply: %w", err)
-		}
-		if table == nil {
-			return fmt.Errorf("InsertEntry Apply: table %s not found", e.TableName)
-		}
-		response, err := table.kv.Set(&kv.SetRequest{Key: e.Key, Value: e.Value})
-		if err != nil {
-			return fmt.Errorf("InsertEntry Apply: %w", err)
-		}
-		if response.Updated {
-			return fmt.Errorf("InsertEntry Apply: expected insert but key already existed")
-		}
-		return nil
-
-	case *events.StartTransaction:
-		// Transaction boundaries are handled at a higher level; no-op for catalog.
-		return nil
-
-	case *events.CommitTransaction:
-		// Also doesn't change catalog directly here.
-		return nil
-
-	case *events.FreePages:
-		// Page freeing is coordinated via allocator; catalog isn't modified.
-		return nil
-
-	default:
-		return fmt.Errorf("unknown event type %T", ev)
-	}
 }
 
 func (db *Database) abortCommits(commits []TransactionCommitRequest, err error) {

@@ -10,12 +10,12 @@ import (
 )
 
 type TransactionID uint64
-
 type TransactionState int
+
 type TransactionCommitRequest struct {
-	Id             TransactionID
-	Reads          []Event
-	Writes         []Event
+	TransactionID  TransactionID
+	ReadEvents     []TableEvent
+	ChangeEvents   []TableEvent
 	AllocatedPages []pager.PagePointer
 	Response       chan<- TransactionCommitResponse
 }
@@ -26,12 +26,10 @@ type TransactionCommitResponse struct {
 }
 
 type Transaction struct {
-	id             TransactionID
-	state          TransactionState
-	catalog        *Catalog
-	pageManager    *pager.PageManager
-	affectedTables map[string]*Table
-	events         []Event
+	id           TransactionID
+	state        TransactionState
+	catalog      *Catalog
+	changeEvents []TableEvent
 
 	commitQueue chan<- TransactionCommitRequest
 	ctx         context.Context
@@ -45,24 +43,14 @@ const (
 )
 
 func NewTransaction(db *Database, ctx context.Context) (*Transaction, error) {
-	root := db.catalog.Root()
-	pageManager, err := pager.NewPageManager(db.storage, db.allocator, db.config.PageSize)
-	if err != nil {
-		return nil, err
-	}
-
-	catalog, err := NewCatalog(root, pageManager)
-	if err != nil {
-		return nil, err
-	}
+	// Clone table catalog for transaction to work with its own copy of tables and page manager state
+	catalog := db.catalog.clone()
 
 	tx := &Transaction{
 		id: TransactionID(atomic.AddUint64((*uint64)(&db.nextTransactionID), 1)),
 
-		state:          ACTIVE,
-		catalog:        catalog,
-		pageManager:    pageManager,
-		affectedTables: map[string]*Table{},
+		state:   ACTIVE,
+		catalog: catalog,
 
 		commitQueue: db.commitQueue,
 		ctx:         ctx,
@@ -82,7 +70,7 @@ func (tx *Transaction) Commit() (err error) {
 			err = fmt.Errorf("Transaction: panic during commit: %v", panic)
 		}
 
-		// in any case we reset transaction changes once it is finished in any state
+		// In any case we reset transaction changes once it is finished in any state
 		tx.Rollback()
 	}()
 
@@ -90,22 +78,23 @@ func (tx *Transaction) Commit() (err error) {
 		return fmt.Errorf("Transaction: couldn't commit transaction with id %d because it is not active", tx.id)
 	}
 
-	reads, writes := tx.collectEvents()
+	changeEvents := append([]TableEvent{}, tx.changeEvents...)
+	changeEvents = append(changeEvents, tx.catalog.ChangeEvents()...)
 
-	// if there is nothing to write, than just return
-	if len(writes) == 0 {
+	// If there is nothing to write, then just return
+	if len(changeEvents) == 0 {
 		tx.markCommitted()
 		return nil
 	}
 
-	// create channel to get response from db writer
+	// Create channel to get response from db writer
 	responseChannel := make(chan TransactionCommitResponse, 1)
 
 	tx.commitQueue <- TransactionCommitRequest{
-		Id:       tx.id,
-		Writes:   writes,
-		Reads:    reads,
-		Response: responseChannel,
+		TransactionID: tx.id,
+		ChangeEvents:  changeEvents,
+		ReadEvents:    nil,
+		Response:      responseChannel,
 	}
 
 	select {
@@ -128,22 +117,16 @@ func (tx *Transaction) Rollback() {
 }
 
 func (tx *Transaction) Table(tableName string) (*Table, error) {
-	if table, ok := tx.affectedTables[tableName]; ok {
-		return table, nil
-	}
-
-	table, err := tx.catalog.GetTable(tableName)
+	table, err := tx.catalog.Table(tableName)
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't get table %s: %w", tableName, err)
 	}
-
-	tx.affectedTables[tableName] = table
 
 	return table, nil
 }
 
 func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
-	table, err := tx.catalog.GetTable(schema.Name)
+	table, err := tx.catalog.Table(schema.Name)
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because of error during getting table: %w", schema.Name, err)
 	}
@@ -157,10 +140,9 @@ func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because of error during creating table: %w", schema.Name, err)
 	}
 
-	tx.affectedTables[schema.Name] = table
 	stringifiedSchema, _ := json.Marshal(schema)
 
-	tx.events = append(tx.events, &events.CreateTable{
+	tx.changeEvents = append(tx.changeEvents, &events.CreateTable{
 		TableName: table.Name(),
 		Schema:    stringifiedSchema,
 	})
@@ -194,21 +176,3 @@ func (tx *Transaction) markAborted() bool {
 	tx.state = ABORTED
 	return true
 }
-
-func (tx *Transaction) collectEvents() (reads []Event, writes []Event) {
-	writes = tx.events
-
-	for _, table := range tx.affectedTables {
-		// if table doesn't have events than table was not modified
-		if len(table.events) == 0 {
-			continue
-		}
-		writes = append(writes, table.events...)
-	}
-
-	return
-}
-
-// func (tx *Transaction) resetChanges() {
-// 	tx.allocator.Free(tx.pageManager.State().AllocatedPages.Values())
-// }

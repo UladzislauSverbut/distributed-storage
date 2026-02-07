@@ -5,7 +5,7 @@ import "strconv"
 const COMMIT_TRANSACTION_EVENT = "COMMIT_TRANSACTION"
 
 type CommitTransaction struct {
-	TxID TxID
+	ID uint64
 }
 
 func (e *CommitTransaction) Name() string {
@@ -13,7 +13,7 @@ func (e *CommitTransaction) Name() string {
 }
 
 func (e *CommitTransaction) Serialize() []byte {
-	return []byte(e.Name() + "(TX=" + strconv.FormatUint(uint64(e.TxID), 10) + ")\n")
+	return []byte(e.Name() + "(TX=" + strconv.FormatUint(e.ID, 10) + ")\n")
 }
 
 func (e *CommitTransaction) Parse(data []byte) error {

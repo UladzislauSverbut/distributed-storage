@@ -15,7 +15,7 @@ func NewWal(storage store.Storage) *Wal {
 	}
 }
 
-func (wal *Wal) Write(events []Event) error {
+func (wal *Wal) Write(events []TableEvent) error {
 	log := []byte{}
 	for _, event := range events {
 		log = append(log, event.Serialize()...)

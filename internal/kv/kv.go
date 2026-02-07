@@ -13,7 +13,6 @@ var config = tree.TreeConfig{
 
 type KeyValue struct {
 	tree        *tree.Tree
-	parent      *KeyValue
 	pageManager *pager.PageManager
 }
 

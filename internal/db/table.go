@@ -23,19 +23,21 @@ type TableSchema struct {
 }
 
 type Table struct {
-	kv     *kv.KeyValue
-	schema *TableSchema
-	events []Event
-	size   uint64
+	kv           *kv.KeyValue
+	schema       *TableSchema
+	changeEvents []TableEvent
+
+	pageManager *pager.PageManager
 }
 
-func NewTable(root pager.PagePointer, pageManager *pager.PageManager, schema *TableSchema, size uint64) (*Table, error) {
+func NewTable(root pager.PagePointer, pageManager *pager.PageManager, schema *TableSchema) (*Table, error) {
 	kv := kv.NewKeyValue(root, pageManager)
 	table := &Table{
-		kv:     kv,
-		schema: schema,
-		size:   size,
-		events: []Event{},
+		kv:           kv,
+		schema:       schema,
+		changeEvents: []TableEvent{},
+
+		pageManager: pageManager,
 	}
 
 	if err := table.validateTableSchema(); err != nil {
@@ -109,7 +111,7 @@ func (table *Table) Delete(query *vals.Object) error {
 	if response, err := table.kv.Delete(&kv.DeleteRequest{Key: index}); err != nil {
 		return err
 	} else {
-		table.events = append(table.events, &events.DeleteEntry{
+		table.changeEvents = append(table.changeEvents, &events.DeleteEntry{
 			TableName: table.schema.Name,
 			Key:       index,
 			Value:     response.OldValue,
@@ -142,7 +144,7 @@ func (table *Table) Insert(record *vals.Object) error {
 		return err
 	}
 
-	table.events = append(table.events, &events.InsertEntry{
+	table.changeEvents = append(table.changeEvents, &events.InsertEntry{
 		TableName: table.schema.Name,
 		Key:       index,
 		Value:     value})
@@ -177,7 +179,7 @@ func (table *Table) Update(record *vals.Object) error {
 		return err
 	}
 
-	table.events = append(table.events, &events.UpdateEntry{
+	table.changeEvents = append(table.changeEvents, &events.UpdateEntry{
 		TableName: table.schema.Name,
 		Key:       index,
 		NewValue:  newValue,
@@ -211,7 +213,7 @@ func (table *Table) Upsert(record *vals.Object) error {
 			return err
 		}
 
-		table.events = append(table.events, &events.InsertEntry{
+		table.changeEvents = append(table.changeEvents, &events.InsertEntry{
 			TableName: table.schema.Name,
 			Key:       index,
 			Value:     newValue,
@@ -221,7 +223,7 @@ func (table *Table) Upsert(record *vals.Object) error {
 			return err
 		}
 
-		table.events = append(table.events, &events.UpdateEntry{
+		table.changeEvents = append(table.changeEvents, &events.UpdateEntry{
 			TableName: table.schema.Name,
 			Key:       index,
 			NewValue:  newValue,
@@ -244,12 +246,18 @@ func (table *Table) Schema() *TableSchema {
 	return table.schema
 }
 
-func (table *Table) Size() uint64 {
-	return table.size
+func (table *Table) ChangeEvents() []TableEvent {
+	return table.changeEvents
 }
 
-func (table *Table) Events() []Event {
-	return table.events
+func (table *Table) clone() *Table {
+	return &Table{
+		kv:           kv.NewKeyValue(table.kv.Root(), table.pageManager),
+		schema:       table.schema,
+		changeEvents: append([]TableEvent{}, table.changeEvents...),
+
+		pageManager: table.pageManager,
+	}
 }
 
 func (table *Table) createSecondaryIndexes(record *vals.Object) error {
@@ -370,7 +378,7 @@ func (table *Table) decodePayload(encodedPayload []byte) *vals.Object {
 		if encodedPayload[0] == 0 {
 			record.Set(columnName, vals.NewNull())
 		} else {
-			columnValue := vals.New(table.schema.ColumnTypes[columnName])
+			columnValue := vals.Init(table.schema.ColumnTypes[columnName])
 			columnValue.Parse(encodedPayload[1:])
 
 			encodedPayload = encodedPayload[columnValue.Size()+1:]
@@ -429,7 +437,7 @@ func (table *Table) decodeSecondaryIndex(encodedIndex []byte) (primaryIndexVals 
 	encodedIndex = encodedIndex[INDEX_ID_SIZE:]
 
 	for _, columnName := range table.schema.SecondaryIndexes[secondaryIndexNumber] {
-		columnValue := vals.New(table.schema.ColumnTypes[columnName])
+		columnValue := vals.Init(table.schema.ColumnTypes[columnName])
 		columnValue.Parse(encodedIndex)
 		secondaryIndexVals = append(secondaryIndexVals, columnValue)
 
@@ -437,7 +445,7 @@ func (table *Table) decodeSecondaryIndex(encodedIndex []byte) (primaryIndexVals 
 	}
 
 	for _, columnName := range table.schema.PrimaryIndex {
-		columnValue := vals.New(table.schema.ColumnTypes[columnName])
+		columnValue := vals.Init(table.schema.ColumnTypes[columnName])
 		columnValue.Parse(encodedIndex)
 		primaryIndexVals = append(primaryIndexVals, columnValue)
 

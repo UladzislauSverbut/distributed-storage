@@ -5,7 +5,7 @@ import "strconv"
 const START_TRANSACTION_EVENT = "START_TRANSACTION"
 
 type StartTransaction struct {
-	TxID TxID
+	ID uint64
 }
 
 func (e *StartTransaction) Name() string {
@@ -13,7 +13,7 @@ func (e *StartTransaction) Name() string {
 }
 
 func (e *StartTransaction) Serialize() []byte {
-	return []byte(e.Name() + "(TX=" + strconv.FormatUint(uint64(e.TxID), 10) + ")\n")
+	return []byte(e.Name() + "(TX=" + strconv.FormatUint(uint64(e.ID), 10) + ")\n")
 }
 
 func (e *StartTransaction) Parse(data []byte) error {

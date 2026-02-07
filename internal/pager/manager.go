@@ -74,7 +74,7 @@ func (manager *PageManager) CreatePage(data []byte) PagePointer {
 }
 
 func (manager *PageManager) FreePage(pointer PagePointer) {
-	// if released page was allocated than we can return it to free pages because nobody can reference this page in other transactions
+	// If released page was allocated than we can return it to free pages because nobody can reference this page in other transactions
 	if manager.state.AllocatedPages.Has(pointer) {
 		manager.state.AvailablePages.Add(pointer)
 	} else {
@@ -84,11 +84,17 @@ func (manager *PageManager) FreePage(pointer PagePointer) {
 	delete(manager.state.pageUpdates, pointer)
 }
 
-func (manager *PageManager) Save() {
+func (manager *PageManager) Save() error {
 	for pointer, page := range manager.state.pageUpdates {
 		if page != nil {
-			manager.storage.UpdateMemorySegment(int(pointer)*manager.config.pageSize, page[0:manager.config.pageSize])
-			delete(manager.state.pageUpdates, pointer)
+			if err := manager.storage.UpdateMemorySegment(int(pointer)*manager.config.pageSize, page[0:manager.config.pageSize]); err != nil {
+				return err
+			}
 		}
 	}
+
+	// Clear all page updates after saving because they are already applied to storage
+	manager.state.pageUpdates = map[PagePointer][]byte{}
+
+	return nil
 }

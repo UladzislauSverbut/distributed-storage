@@ -9,7 +9,7 @@ import (
 const FREE_PAGES_EVENT = "FREE_PAGES"
 
 type FreePages struct {
-	TxID  TxID
+	TxID  uint64
 	Pages []pager.PagePointer
 }
 
