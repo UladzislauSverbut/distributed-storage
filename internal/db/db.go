@@ -18,19 +18,28 @@ const HEADER_SIZE = 24
 const NUMBER_OF_PARALLEL_TRANSACTIONS = 1024 // max number of parallel transactions
 const COMMIT_BATCH_SIZE = 64                 // number of transactions to commit in a single batch
 
-const TRANSACTION_TIMEOUT = 30 * time.Second
+const TRANSACTION_TIMEOUT = 30 * time.Minute
 const COMMIT_INTERVAL = 10 * time.Millisecond
 
+type DatabaseState struct {
+	Root              pager.PagePointer
+	PagesCount        uint64
+	NextTransactionID TransactionID
+}
+
 type Database struct {
-	catalog           *Catalog
-	config            *DatabaseConfig
-	storage           store.Storage
-	transactions      map[TransactionID]*Transaction
+	root              pager.PagePointer
+	pagesCount        uint64
 	nextTransactionID TransactionID
 
-	wal         *Wal
-	allocator   *pager.PageAllocator
+	config       *DatabaseConfig
+	storage      store.Storage
+	transactions map[TransactionID]*Transaction
+
+	stateQueue  chan struct{}
 	commitQueue chan TransactionCommitRequest
+
+	wal *Wal
 
 	mu sync.RWMutex
 }
@@ -57,32 +66,26 @@ func NewDatabase(config *DatabaseConfig) (*Database, error) {
 	}
 
 	root, nextTransactionID, pagesCount := parseHeader(dbStorage.MemorySegment(0, HEADER_SIZE))
-	allocator := pager.NewPageAllocator(pagesCount)
 	wal := NewWal(walStorage)
 
-	pager, err := pager.NewPageManager(dbStorage, allocator, config.PageSize)
-	if err != nil {
-		return nil, err
-	}
-
-	catalog, err := NewCatalog(root, pager)
 	if err != nil {
 		return nil, err
 	}
 
 	db := &Database{
-		catalog:           catalog,
-		config:            config,
-		storage:           dbStorage,
-		transactions:      make(map[TransactionID]*Transaction),
+		root:              root,
+		pagesCount:        pagesCount,
 		nextTransactionID: nextTransactionID,
 
+		config:       config,
+		storage:      dbStorage,
+		transactions: make(map[TransactionID]*Transaction),
+
 		wal:         wal,
-		allocator:   allocator,
 		commitQueue: make(chan TransactionCommitRequest, NUMBER_OF_PARALLEL_TRANSACTIONS),
 	}
 
-	go db.applyCommits()
+	go db.collectCommits()
 
 	return db, nil
 }
@@ -105,7 +108,7 @@ func (db *Database) StartTransaction(request func(*Transaction)) error {
 	return nil
 }
 
-func (db *Database) applyCommits() {
+func (db *Database) collectCommits() {
 	commits := make([]TransactionCommitRequest, 0, COMMIT_BATCH_SIZE)
 	ticker := time.NewTicker(COMMIT_INTERVAL)
 
@@ -133,11 +136,13 @@ func (db *Database) applyCommits() {
 }
 
 func (db *Database) processCommits(commits []TransactionCommitRequest) {
+	catalog := NewCatalog(db)
+
 	abortedCommits := make([]TransactionCommitRequest, 0)
 	approvedCommits := make([]TransactionCommitRequest, 0)
 
 	for _, commit := range commits {
-		if err := db.catalog.ApplyChangeEvents(commit.ChangeEvents); err != nil {
+		if err := catalog.ApplyChangeEvents(commit.ChangeEvents); err != nil {
 			abortedCommits = append(abortedCommits, commit)
 		} else {
 			approvedCommits = append(approvedCommits, commit)
@@ -157,31 +162,31 @@ func (db *Database) processCommits(commits []TransactionCommitRequest) {
 		return
 	}
 
-	if err := db.catalog.PersistTables(); err != nil {
+	if err := catalog.PersistTables(); err != nil {
 		db.abortCommits(commits, fmt.Errorf("Catalog persist failed: %w", err))
 		return
 	}
 
 	db.approveCommits(approvedCommits)
 
-	db.storage.UpdateMemorySegment(0, buildHeader(db.catalog.Root(), db.nextTransactionID, db.allocator.Count()))
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	db.root = catalog.Root()
+	db.pagesCount = catalog.pageManager.TotalPages()
+
+	db.storage.UpdateMemorySegment(0, buildHeader(db.root, db.nextTransactionID, db.pagesCount))
 
 	db.storage.Flush()
 }
 
 func (db *Database) abortCommits(commits []TransactionCommitRequest, err error) {
-	freePages := make([]pager.PagePointer, 0)
-
 	for _, commit := range commits {
-		freePages = append(freePages, commit.AllocatedPages...)
-
 		commit.Response <- TransactionCommitResponse{
 			Error:   err,
 			Success: false,
 		}
 	}
-
-	db.allocator.Free(freePages)
 }
 
 func (db *Database) approveCommits(commits []TransactionCommitRequest) {

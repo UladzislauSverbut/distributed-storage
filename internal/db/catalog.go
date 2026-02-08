@@ -23,18 +23,20 @@ type Catalog struct {
 	pageManager  *pager.PageManager
 }
 
-func NewCatalog(root pager.PagePointer, pageManager *pager.PageManager) (*Catalog, error) {
-	table, err := NewTable(root, pageManager, &catalogSchema)
+func NewCatalog(db *Database) *Catalog {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 
-	if err != nil {
-		return nil, fmt.Errorf("Catalog: couldn't initialize catalog table: %w", err)
-	}
+	pageManager := pager.NewPageManager(db.storage, db.pagesCount, db.config.PageSize)
+
+	// The catalog is stored as a regular table with predefined schema, so it NewTable can't return error
+	table, _ := NewTable(db.root, pageManager, &catalogSchema)
 
 	return &Catalog{
 		catalogTable: table,
 		loadedTables: make(map[string]*Table),
 		pageManager:  pageManager,
-	}, nil
+	}
 }
 
 func (catalog *Catalog) Table(name string) (*Table, error) {
@@ -81,6 +83,8 @@ func (catalog *Catalog) UpdateTable(name string, table *Table) error {
 	if err := catalog.catalogTable.Upsert(schemaRecord); err != nil {
 		return fmt.Errorf("Catalog: couldn't save table %s: %w", name, err)
 	}
+
+	catalog.loadedTables[name] = table
 
 	return nil
 }
@@ -181,14 +185,6 @@ func (catalog *Catalog) PersistTables() error {
 	}
 
 	return nil
-}
-
-func (catalog *Catalog) clone() *Catalog {
-	return &Catalog{
-		catalogTable: catalog.catalogTable.clone(),
-		loadedTables: make(map[string]*Table),
-		pageManager:  catalog.pageManager,
-	}
 }
 
 func (catalog *Catalog) Root() pager.PagePointer {

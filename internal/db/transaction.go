@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"distributed-storage/internal/events"
-	"distributed-storage/internal/pager"
 	"encoding/json"
 	"fmt"
 	"sync/atomic"
@@ -13,11 +12,10 @@ type TransactionID uint64
 type TransactionState int
 
 type TransactionCommitRequest struct {
-	TransactionID  TransactionID
-	ReadEvents     []TableEvent
-	ChangeEvents   []TableEvent
-	AllocatedPages []pager.PagePointer
-	Response       chan<- TransactionCommitResponse
+	TransactionID TransactionID
+	ReadEvents    []TableEvent
+	ChangeEvents  []TableEvent
+	Response      chan<- TransactionCommitResponse
 }
 
 type TransactionCommitResponse struct {
@@ -30,6 +28,7 @@ type Transaction struct {
 	state        TransactionState
 	catalog      *Catalog
 	changeEvents []TableEvent
+	readEvents   []TableEvent
 
 	commitQueue chan<- TransactionCommitRequest
 	ctx         context.Context
@@ -43,8 +42,7 @@ const (
 )
 
 func NewTransaction(db *Database, ctx context.Context) (*Transaction, error) {
-	// Clone table catalog for transaction to work with its own copy of tables and page manager state
-	catalog := db.catalog.clone()
+	catalog := NewCatalog(db)
 
 	tx := &Transaction{
 		id: TransactionID(atomic.AddUint64((*uint64)(&db.nextTransactionID), 1)),
@@ -58,7 +56,6 @@ func NewTransaction(db *Database, ctx context.Context) (*Transaction, error) {
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
-
 	db.transactions[tx.id] = tx
 
 	return tx, nil
@@ -78,11 +75,8 @@ func (tx *Transaction) Commit() (err error) {
 		return fmt.Errorf("Transaction: couldn't commit transaction with id %d because it is not active", tx.id)
 	}
 
-	changeEvents := append([]TableEvent{}, tx.changeEvents...)
-	changeEvents = append(changeEvents, tx.catalog.ChangeEvents()...)
-
 	// If there is nothing to write, then just return
-	if len(changeEvents) == 0 {
+	if len(tx.changeEvents) == 0 {
 		tx.markCommitted()
 		return nil
 	}
@@ -92,8 +86,8 @@ func (tx *Transaction) Commit() (err error) {
 
 	tx.commitQueue <- TransactionCommitRequest{
 		TransactionID: tx.id,
-		ChangeEvents:  changeEvents,
-		ReadEvents:    nil,
+		ChangeEvents:  tx.changeEvents,
+		ReadEvents:    tx.readEvents,
 		Response:      responseChannel,
 	}
 

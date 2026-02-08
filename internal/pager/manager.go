@@ -9,13 +9,6 @@ const NULL_PAGE = PagePointer(0)
 
 type PagePointer = uint64
 
-type PageManager struct {
-	storage   store.Storage
-	allocator *PageAllocator
-	config    PageManagerConfig
-	state     PageManagerState
-}
-
 type PageManagerConfig struct {
 	pageSize int
 }
@@ -24,15 +17,21 @@ type PageManagerState struct {
 	AllocatedPages helpers.Set[PagePointer] // set of pages that were given by allocator
 	AvailablePages helpers.Set[PagePointer] // set of pages that are available for usage
 	ReleasedPages  helpers.Set[PagePointer] // set of pages that were released and cannot be used until commit
+	TotalPages     uint64                   // total number of pages in storage
 	pageUpdates    map[PagePointer][]byte   // map of page updates that will be synced with storage
+}
+
+type PageManager struct {
+	storage store.Storage
+	config  PageManagerConfig
+	state   PageManagerState
 }
 
 const SIGNATURE = "PAGE_MANAGER_SIG"
 
-func NewPageManager(storage store.Storage, allocator *PageAllocator, pageSize int) (*PageManager, error) {
+func NewPageManager(storage store.Storage, pagesNumber uint64, pageSize int) *PageManager {
 	manager := &PageManager{
-		storage:   storage,
-		allocator: allocator,
+		storage: storage,
 		config: PageManagerConfig{
 			pageSize: pageSize,
 		},
@@ -40,15 +39,12 @@ func NewPageManager(storage store.Storage, allocator *PageAllocator, pageSize in
 			AllocatedPages: helpers.NewSet[PagePointer](),
 			AvailablePages: helpers.NewSet[PagePointer](),
 			ReleasedPages:  helpers.NewSet[PagePointer](),
+			TotalPages:     pagesNumber,
 			pageUpdates:    map[PagePointer][]byte{},
 		},
 	}
 
-	return manager, nil
-}
-
-func (manager *PageManager) State() PageManagerState {
-	return manager.state
+	return manager
 }
 
 func (manager *PageManager) Page(pointer PagePointer) []byte {
@@ -65,7 +61,9 @@ func (manager *PageManager) CreatePage(data []byte) PagePointer {
 	if availablePage, ok := manager.state.AvailablePages.Pop(); ok {
 		pagePointer = availablePage
 	} else {
-		pagePointer = manager.allocator.Get()
+		manager.state.TotalPages++
+
+		pagePointer = manager.state.TotalPages
 		manager.state.AllocatedPages.Add(pagePointer)
 	}
 
@@ -82,6 +80,18 @@ func (manager *PageManager) FreePage(pointer PagePointer) {
 	}
 
 	delete(manager.state.pageUpdates, pointer)
+}
+
+func (manager *PageManager) ReleasedPages() []PagePointer {
+	return manager.state.ReleasedPages.Values()
+}
+
+func (manager *PageManager) AllocatedPages() []PagePointer {
+	return manager.state.AllocatedPages.Values()
+}
+
+func (manager *PageManager) TotalPages() uint64 {
+	return manager.state.TotalPages
 }
 
 func (manager *PageManager) Save() error {
