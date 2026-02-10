@@ -57,7 +57,7 @@ func (scanner *Scanner) seekLessOrEqual(key []byte) *Cursor {
 	cursor := &Cursor{tree: tree}
 
 	for parentPointer := tree.root; parentPointer != NULL_NODE; {
-		parent := &Node{data: tree.pageManager.Page(parentPointer)}
+		parent := &Node{data: tree.allocator.Page(parentPointer)}
 
 		lessOrEqualNodePointer := tree.getLessOrEqualKeyPosition(parent, key)
 

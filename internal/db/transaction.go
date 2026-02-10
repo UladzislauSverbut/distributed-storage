@@ -26,7 +26,7 @@ type TransactionCommitResponse struct {
 type Transaction struct {
 	id           TransactionID
 	state        TransactionState
-	catalog      *Catalog
+	manager      *TableManager
 	changeEvents []TableEvent
 	readEvents   []TableEvent
 
@@ -42,13 +42,11 @@ const (
 )
 
 func NewTransaction(db *Database, ctx context.Context) (*Transaction, error) {
-	catalog := NewCatalog(db)
-
 	tx := &Transaction{
 		id: TransactionID(atomic.AddUint64((*uint64)(&db.nextTransactionID), 1)),
 
 		state:   ACTIVE,
-		catalog: catalog,
+		manager: NewTableManager(db),
 
 		commitQueue: db.commitQueue,
 		ctx:         ctx,
@@ -111,7 +109,7 @@ func (tx *Transaction) Rollback() {
 }
 
 func (tx *Transaction) Table(tableName string) (*Table, error) {
-	table, err := tx.catalog.Table(tableName)
+	table, err := tx.manager.Table(tableName)
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't get table %s: %w", tableName, err)
 	}
@@ -120,7 +118,7 @@ func (tx *Transaction) Table(tableName string) (*Table, error) {
 }
 
 func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
-	table, err := tx.catalog.Table(schema.Name)
+	table, err := tx.manager.Table(schema.Name)
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because of error during getting table: %w", schema.Name, err)
 	}
@@ -129,7 +127,7 @@ func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because it already exist", schema.Name)
 	}
 
-	table, err = tx.catalog.CreateTable(schema)
+	table, err = tx.manager.CreateTable(schema)
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because of error during creating table: %w", schema.Name, err)
 	}

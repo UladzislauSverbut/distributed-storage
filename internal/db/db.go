@@ -136,13 +136,13 @@ func (db *Database) collectCommits() {
 }
 
 func (db *Database) processCommits(commits []TransactionCommitRequest) {
-	catalog := NewCatalog(db)
+	manager := NewTableManager(db)
 
 	abortedCommits := make([]TransactionCommitRequest, 0)
 	approvedCommits := make([]TransactionCommitRequest, 0)
 
 	for _, commit := range commits {
-		if err := catalog.ApplyChangeEvents(commit.ChangeEvents); err != nil {
+		if err := manager.ApplyChangeEvents(commit.ChangeEvents); err != nil {
 			abortedCommits = append(abortedCommits, commit)
 		} else {
 			approvedCommits = append(approvedCommits, commit)
@@ -162,7 +162,7 @@ func (db *Database) processCommits(commits []TransactionCommitRequest) {
 		return
 	}
 
-	if err := catalog.PersistTables(); err != nil {
+	if err := manager.PersistTables(); err != nil {
 		db.abortCommits(commits, fmt.Errorf("Catalog persist failed: %w", err))
 		return
 	}
@@ -172,8 +172,8 @@ func (db *Database) processCommits(commits []TransactionCommitRequest) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	db.root = catalog.Root()
-	db.pagesCount = catalog.pageManager.TotalPages()
+	db.root = manager.Root()
+	db.pagesCount = manager.allocator.TotalPages()
 
 	db.storage.UpdateMemorySegment(0, buildHeader(db.root, db.nextTransactionID, db.pagesCount))
 

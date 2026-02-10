@@ -88,7 +88,7 @@ func (cursor *Cursor) moveToRightSiblingParent() {
 	_, position = cursor.moveToRightSiblingNode()
 
 	for parent.getType() == NODE_PARENT {
-		parent = &Node{data: cursor.tree.pageManager.Page(parent.getChildPointer(position))}
+		parent = &Node{data: cursor.tree.allocator.Page(parent.getChildPointer(position))}
 
 		position = NodeKeyPosition(0)
 
@@ -110,7 +110,7 @@ func (cursor *Cursor) moveToLeftSiblingParent() {
 	_, position = cursor.moveToLeftSiblingNode()
 
 	for parent.getType() == NODE_PARENT {
-		parent = &Node{data: cursor.tree.pageManager.Page(parent.getChildPointer(position))}
+		parent = &Node{data: cursor.tree.allocator.Page(parent.getChildPointer(position))}
 
 		position = parent.getStoredKeysNumber() - 1
 

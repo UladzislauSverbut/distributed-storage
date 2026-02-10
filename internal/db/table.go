@@ -27,17 +27,17 @@ type Table struct {
 	schema       *TableSchema
 	changeEvents []TableEvent
 
-	pageManager *pager.PageManager
+	allocator *pager.PageAllocator
 }
 
-func NewTable(root pager.PagePointer, pageManager *pager.PageManager, schema *TableSchema) (*Table, error) {
-	kv := kv.NewKeyValue(root, pageManager)
+func NewTable(root pager.PagePointer, allocator *pager.PageAllocator, schema *TableSchema) (*Table, error) {
+	kv := kv.NewKeyValue(root, allocator)
 	table := &Table{
 		kv:           kv,
 		schema:       schema,
 		changeEvents: []TableEvent{},
 
-		pageManager: pageManager,
+		allocator: allocator,
 	}
 
 	if err := table.validateTableSchema(); err != nil {
@@ -252,11 +252,11 @@ func (table *Table) ChangeEvents() []TableEvent {
 
 func (table *Table) clone() *Table {
 	return &Table{
-		kv:           kv.NewKeyValue(table.kv.Root(), table.pageManager),
+		kv:           kv.NewKeyValue(table.kv.Root(), table.allocator),
 		schema:       table.schema,
 		changeEvents: append([]TableEvent{}, table.changeEvents...),
 
-		pageManager: table.pageManager,
+		allocator: table.allocator,
 	}
 }
 

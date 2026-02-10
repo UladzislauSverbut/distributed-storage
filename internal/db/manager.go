@@ -17,36 +17,35 @@ var catalogSchema = TableSchema{
 	ColumnTypes:  map[string]vals.ValueType{"name": vals.TYPE_STRING, "definition": vals.TYPE_STRING, "root": vals.TYPE_UINT64, "size": vals.TYPE_UINT64},
 }
 
-type Catalog struct {
-	catalogTable *Table
+type TableManager struct {
+	catalog      *Table
 	loadedTables map[string]*Table
-	pageManager  *pager.PageManager
+	allocator    *pager.PageAllocator
 }
 
-func NewCatalog(db *Database) *Catalog {
+func NewTableManager(db *Database) *TableManager {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	pageManager := pager.NewPageManager(db.storage, db.pagesCount, db.config.PageSize)
-
+	allocator := pager.NewPageAllocator(db.storage, db.pagesCount, db.config.PageSize)
 	// The catalog is stored as a regular table with predefined schema, so it NewTable can't return error
-	table, _ := NewTable(db.root, pageManager, &catalogSchema)
+	catalog, _ := NewTable(db.root, allocator, &catalogSchema)
 
-	return &Catalog{
-		catalogTable: table,
+	return &TableManager{
+		catalog:      catalog,
 		loadedTables: make(map[string]*Table),
-		pageManager:  pageManager,
+		allocator:    allocator,
 	}
 }
 
-func (catalog *Catalog) Table(name string) (*Table, error) {
-	if table, ok := catalog.loadedTables[name]; ok {
+func (manager *TableManager) Table(name string) (*Table, error) {
+	if table, ok := manager.loadedTables[name]; ok {
 		return table, nil
 	}
 
 	query := vals.NewObject().Set("name", vals.NewString(name))
 
-	record, err := catalog.catalogTable.Get(query)
+	record, err := manager.catalog.Get(query)
 
 	if err != nil {
 		return nil, fmt.Errorf("Catalog: couldn't read table schema: %w", err)
@@ -64,15 +63,15 @@ func (catalog *Catalog) Table(name string) (*Table, error) {
 		return nil, fmt.Errorf("Catalog: couldn't parse table schema: %w", err)
 	}
 
-	catalog.loadedTables[name], err = NewTable(root, catalog.pageManager, schema)
+	manager.loadedTables[name], err = NewTable(root, manager.allocator, schema)
 	if err != nil {
 		return nil, fmt.Errorf("Catalog: couldn't initialize table %s: %w", name, err)
 	}
 
-	return catalog.loadedTables[name], nil
+	return manager.loadedTables[name], nil
 }
 
-func (catalog *Catalog) UpdateTable(name string, table *Table) error {
+func (manager *TableManager) UpdateTable(name string, table *Table) error {
 	stringifiedSchema, _ := json.Marshal(table.schema)
 
 	schemaRecord := vals.NewObject().
@@ -80,43 +79,42 @@ func (catalog *Catalog) UpdateTable(name string, table *Table) error {
 		Set("definition", vals.NewString(string(stringifiedSchema))).
 		Set("root", vals.NewInt(table.Root()))
 
-	if err := catalog.catalogTable.Upsert(schemaRecord); err != nil {
+	if err := manager.catalog.Upsert(schemaRecord); err != nil {
 		return fmt.Errorf("Catalog: couldn't save table %s: %w", name, err)
 	}
 
-	catalog.loadedTables[name] = table
-
+	manager.loadedTables[name] = table
 	return nil
 }
 
-func (catalog *Catalog) CreateTable(schema *TableSchema) (*Table, error) {
-	table, err := NewTable(pager.NULL_PAGE, catalog.pageManager, schema)
+func (manager *TableManager) CreateTable(schema *TableSchema) (*Table, error) {
+	table, err := NewTable(pager.NULL_PAGE, manager.allocator, schema)
 	if err != nil {
 		return nil, fmt.Errorf("Catalog: couldn't create table %s: %w", schema.Name, err)
 	}
 
-	if err := catalog.UpdateTable(schema.Name, table); err != nil {
+	if err := manager.UpdateTable(schema.Name, table); err != nil {
 		return nil, fmt.Errorf("Catalog: couldn't register table %s in catalog: %w", schema.Name, err)
 	}
 
 	return table, nil
 }
 
-func (catalog *Catalog) DeleteTable(name string) error {
+func (manager *TableManager) DeleteTable(name string) error {
 	query := vals.NewObject().Set("name", vals.NewString(name))
 
-	if err := catalog.catalogTable.Delete(query); err != nil {
+	if err := manager.catalog.Delete(query); err != nil {
 		return fmt.Errorf("Catalog: couldn't delete table %s from catalog: %w", name, err)
 	}
 
-	delete(catalog.loadedTables, name)
+	delete(manager.loadedTables, name)
 	return nil
 }
 
-func (catalog *Catalog) ChangeEvents() []TableEvent {
+func (manager *TableManager) ChangeEvents() []TableEvent {
 	events := make([]TableEvent, 0)
 
-	for _, table := range catalog.loadedTables {
+	for _, table := range manager.loadedTables {
 		tableEvents := table.ChangeEvents()
 		if len(tableEvents) > 0 {
 			events = append(events, tableEvents...)
@@ -126,37 +124,37 @@ func (catalog *Catalog) ChangeEvents() []TableEvent {
 	return events
 }
 
-func (catalog *Catalog) ApplyChangeEvents(changeEvents []TableEvent) (err error) {
+func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (err error) {
 	// Save previous state to be able to rollback in case of error during apply
-	previousRootTable := catalog.catalogTable.clone()
+	previousRootTable := manager.catalog.clone()
 
 	defer func() {
 		if err != nil {
 			// If any error occurs during apply, rollback to the previous state of catalog
-			catalog.catalogTable = previousRootTable
+			manager.catalog = previousRootTable
 		}
 	}()
 
 	for _, changeEvent := range changeEvents {
 		switch event := changeEvent.(type) {
 		case *events.CreateTable:
-			if err = catalog.applyCreateTableEvent(event); err != nil {
+			if err = manager.applyCreateTableEvent(event); err != nil {
 				return err
 			}
 		case *events.DeleteTable:
-			if err = catalog.applyDeleteTableEvent(event); err != nil {
+			if err = manager.applyDeleteTableEvent(event); err != nil {
 				return err
 			}
 		case *events.DeleteEntry:
-			if err = catalog.applyDeleteEntryEvent(event); err != nil {
+			if err = manager.applyDeleteEntryEvent(event); err != nil {
 				return err
 			}
 		case *events.UpdateEntry:
-			if err = catalog.applyUpdateEntryEvent(event); err != nil {
+			if err = manager.applyUpdateEntryEvent(event); err != nil {
 				return err
 			}
 		case *events.InsertEntry:
-			if err = catalog.applyInsertEntryEvent(event); err != nil {
+			if err = manager.applyInsertEntryEvent(event); err != nil {
 				return err
 			}
 		case *events.StartTransaction,
@@ -173,68 +171,70 @@ func (catalog *Catalog) ApplyChangeEvents(changeEvents []TableEvent) (err error)
 	return nil
 }
 
-func (catalog *Catalog) PersistTables() error {
-	for name, table := range catalog.loadedTables {
-		if err := catalog.UpdateTable(name, table); err != nil {
+func (manager *TableManager) PersistTables() error {
+	for name, table := range manager.loadedTables {
+		if err := manager.UpdateTable(name, table); err != nil {
 			return fmt.Errorf("Catalog: couldn't save table %s: %w", name, err)
 		}
 	}
 
-	if err := catalog.pageManager.Save(); err != nil {
+	if err := manager.allocator.Save(); err != nil {
 		return fmt.Errorf("Catalog: couldn't save page manager state: %w", err)
 	}
 
 	return nil
 }
 
-func (catalog *Catalog) Root() pager.PagePointer {
-	return catalog.catalogTable.Root()
+func (manager *TableManager) Root() pager.PagePointer {
+	return manager.catalog.Root()
 }
 
-func (catalog *Catalog) applyCreateTableEvent(event *events.CreateTable) error {
+func (manager *TableManager) applyCreateTableEvent(event *events.CreateTable) error {
 	var schema TableSchema
 	if err := json.Unmarshal(event.Schema, &schema); err != nil {
 		return fmt.Errorf("CreateTable Apply: couldn't parse schema: %w", err)
 	}
 
-	// Check if table already exists
-	table, err := catalog.Table(event.TableName)
+	table, err := manager.Table(event.TableName)
 	if err != nil {
 		return fmt.Errorf("CreateTable Replay: %w", err)
 	}
-
 	if table != nil {
 		return fmt.Errorf("CreateTable Apply: couldn't create table %s because it already exists", event.TableName)
 	}
 
-	if _, err := catalog.CreateTable(&schema); err != nil {
+	if _, err := manager.CreateTable(&schema); err != nil {
 		return fmt.Errorf("CreateTable Apply: %w", err)
 	}
+
 	return nil
 }
 
-func (catalog *Catalog) applyDeleteTableEvent(event *events.DeleteTable) error {
-	table, err := catalog.Table(event.TableName)
+func (manager *TableManager) applyDeleteTableEvent(event *events.DeleteTable) error {
+	table, err := manager.Table(event.TableName)
 	if err != nil {
 		return fmt.Errorf("DeleteTable Apply: %w", err)
 	}
 	if table == nil {
 		return fmt.Errorf("DeleteTable Apply: table %s not found", event.TableName)
 	}
-	if err := catalog.DeleteTable(event.TableName); err != nil {
+
+	if err := manager.DeleteTable(event.TableName); err != nil {
 		return fmt.Errorf("DeleteTable Apply: %w", err)
 	}
+
 	return nil
 }
 
-func (catalog *Catalog) applyDeleteEntryEvent(event *events.DeleteEntry) error {
-	table, err := catalog.Table(event.TableName)
+func (manager *TableManager) applyDeleteEntryEvent(event *events.DeleteEntry) error {
+	table, err := manager.Table(event.TableName)
 	if err != nil {
 		return fmt.Errorf("DeleteEntry Apply: %w", err)
 	}
 	if table == nil {
 		return fmt.Errorf("DeleteEntry Apply: table %s not found", event.TableName)
 	}
+
 	response, err := table.kv.Delete(&kv.DeleteRequest{Key: event.Key})
 	if err != nil {
 		return fmt.Errorf("DeleteEntry Apply: %w", err)
@@ -242,17 +242,19 @@ func (catalog *Catalog) applyDeleteEntryEvent(event *events.DeleteEntry) error {
 	if !bytes.Equal(response.OldValue, event.Value) {
 		return fmt.Errorf("DeleteEntry Apply: old value does not match expected value")
 	}
+
 	return nil
 }
 
-func (catalog *Catalog) applyUpdateEntryEvent(event *events.UpdateEntry) error {
-	table, err := catalog.Table(event.TableName)
+func (manager *TableManager) applyUpdateEntryEvent(event *events.UpdateEntry) error {
+	table, err := manager.Table(event.TableName)
 	if err != nil {
 		return fmt.Errorf("UpdateEntry Apply: %w", err)
 	}
 	if table == nil {
 		return fmt.Errorf("UpdateEntry Apply: table %s not found", event.TableName)
 	}
+
 	response, err := table.kv.Set(&kv.SetRequest{Key: event.Key, Value: event.NewValue})
 	if err != nil {
 		return fmt.Errorf("UpdateEntry Apply: %w", err)
@@ -260,17 +262,19 @@ func (catalog *Catalog) applyUpdateEntryEvent(event *events.UpdateEntry) error {
 	if !bytes.Equal(response.OldValue, event.OldValue) {
 		return fmt.Errorf("UpdateEntry Apply: old value does not match expected value")
 	}
+
 	return nil
 }
 
-func (catalog *Catalog) applyInsertEntryEvent(event *events.InsertEntry) error {
-	table, err := catalog.Table(event.TableName)
+func (manager *TableManager) applyInsertEntryEvent(event *events.InsertEntry) error {
+	table, err := manager.Table(event.TableName)
 	if err != nil {
 		return fmt.Errorf("InsertEntry Apply: %w", err)
 	}
 	if table == nil {
 		return fmt.Errorf("InsertEntry Apply: table %s not found", event.TableName)
 	}
+
 	response, err := table.kv.Set(&kv.SetRequest{Key: event.Key, Value: event.Value})
 	if err != nil {
 		return fmt.Errorf("InsertEntry Apply: %w", err)
@@ -278,5 +282,6 @@ func (catalog *Catalog) applyInsertEntryEvent(event *events.InsertEntry) error {
 	if response.Updated {
 		return fmt.Errorf("InsertEntry Apply: expected insert but key already existed")
 	}
+
 	return nil
 }
