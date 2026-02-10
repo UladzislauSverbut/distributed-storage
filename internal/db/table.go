@@ -152,31 +152,31 @@ func (table *Table) Insert(record *vals.Object) error {
 	return nil
 }
 
-func (table *Table) Update(record *vals.Object) error {
+func (table *Table) Update(record *vals.Object) (*vals.Object, error) {
 	index := table.getPrimaryIndex(record)
 
 	if index == nil {
-		return fmt.Errorf("Table: can't update record because one of primary index columns is missing in record %s", record)
+		return nil, fmt.Errorf("Table: can't update record because one of primary index columns is missing in record %s", record)
 	}
 
 	response, err := table.kv.Get(&kv.GetRequest{Key: index})
 
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if response.Value == nil {
-		return fmt.Errorf("Table: can't update record because it doesn't exist: %v", record)
+		return nil, fmt.Errorf("Table: can't update record because it doesn't exist: %v", record)
 	}
 
 	newValue := table.encodePayload(record)
 
 	if _, err := table.kv.Set(&kv.SetRequest{Key: index, Value: newValue}); err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := table.updateSecondaryIndexes(record, table.decodePayload(response.Value)); err != nil {
-		return err
+		return nil, err
 	}
 
 	table.changeEvents = append(table.changeEvents, &events.UpdateEntry{
@@ -186,31 +186,31 @@ func (table *Table) Update(record *vals.Object) error {
 		OldValue:  response.Value,
 	})
 
-	return nil
+	return table.decodePayload(response.Value), nil
 }
 
-func (table *Table) Upsert(record *vals.Object) error {
+func (table *Table) Upsert(record *vals.Object) (*vals.Object, error) {
 	index := table.getPrimaryIndex(record)
 
 	if index == nil {
-		return fmt.Errorf("Table: can't update record because one of primary index columns is missing in record %s", record)
+		return nil, fmt.Errorf("Table: can't update record because one of primary index columns is missing in record %s", record)
 	}
 
 	response, err := table.kv.Get(&kv.GetRequest{Key: index})
 
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	newValue := table.encodePayload(record)
 
 	if _, err := table.kv.Set(&kv.SetRequest{Key: index, Value: newValue}); err != nil {
-		return err
+		return nil, err
 	}
 
 	if response.Value == nil {
 		if err := table.createSecondaryIndexes(record); err != nil {
-			return err
+			return nil, err
 		}
 
 		table.changeEvents = append(table.changeEvents, &events.InsertEntry{
@@ -220,7 +220,7 @@ func (table *Table) Upsert(record *vals.Object) error {
 		})
 	} else {
 		if err := table.updateSecondaryIndexes(record, table.decodePayload(response.Value)); err != nil {
-			return err
+			return nil, err
 		}
 
 		table.changeEvents = append(table.changeEvents, &events.UpdateEntry{
@@ -231,7 +231,7 @@ func (table *Table) Upsert(record *vals.Object) error {
 		})
 	}
 
-	return nil
+	return table.decodePayload(response.Value), nil
 }
 
 func (table *Table) Root() pager.PagePointer {

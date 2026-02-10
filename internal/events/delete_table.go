@@ -9,15 +9,15 @@ type DeleteTable struct {
 	TableRoot pager.PagePointer
 }
 
-func (e *DeleteTable) Name() string {
+func (event *DeleteTable) Name() string {
 	return DELETE_TABLE_EVENT
 }
 
-func (e *DeleteTable) Serialize() []byte {
-	return []byte(e.Name() + "(TABLE=" + e.TableName + ")\n")
+func (event *DeleteTable) Serialize() []byte {
+	return []byte(event.Name() + "(TABLE=" + event.TableName + ")\n")
 }
 
-func (e *DeleteTable) Parse(data []byte) error {
+func (event *DeleteTable) Parse(data []byte) error {
 	// Will be implemented in the future when we need to parse events from WAL.
 	return nil
 }

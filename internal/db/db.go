@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"distributed-storage/internal/events"
+	"distributed-storage/internal/helpers"
 	"distributed-storage/internal/pager"
 	"distributed-storage/internal/store"
 	"fmt"
@@ -16,30 +17,26 @@ const HEADER_SIZE = 24
 
 // bytes
 const NUMBER_OF_PARALLEL_TRANSACTIONS = 1024 // max number of parallel transactions
-const COMMIT_BATCH_SIZE = 64                 // number of transactions to commit in a single batch
+const COMMIT_BATCH_SIZE = 256                // number of transactions to commit in a single batch
 
 const TRANSACTION_TIMEOUT = 30 * time.Minute
 const COMMIT_INTERVAL = 10 * time.Millisecond
 
-type DatabaseState struct {
-	Root              pager.PagePointer
-	PagesCount        uint64
-	NextTransactionID TransactionID
-}
+type DatabaseVersion uint64
 
 type Database struct {
 	root              pager.PagePointer
+	version           DatabaseVersion
 	pagesCount        uint64
 	nextTransactionID TransactionID
 
-	config       *DatabaseConfig
-	storage      store.Storage
-	transactions map[TransactionID]*Transaction
+	wal     *Wal
+	config  *DatabaseConfig
+	storage store.Storage
 
-	stateQueue  chan struct{}
-	commitQueue chan TransactionCommitRequest
-
-	wal *Wal
+	freePages    map[DatabaseVersion][]pager.PagePointer
+	commitQueue  chan TransactionCommit
+	transactions *helpers.MinMap[DatabaseVersion, *Transaction]
 
 	mu sync.RWMutex
 }
@@ -66,23 +63,19 @@ func NewDatabase(config *DatabaseConfig) (*Database, error) {
 	}
 
 	root, nextTransactionID, pagesCount := parseHeader(dbStorage.MemorySegment(0, HEADER_SIZE))
-	wal := NewWal(walStorage)
-
-	if err != nil {
-		return nil, err
-	}
 
 	db := &Database{
 		root:              root,
 		pagesCount:        pagesCount,
 		nextTransactionID: nextTransactionID,
 
-		config:       config,
-		storage:      dbStorage,
-		transactions: make(map[TransactionID]*Transaction),
+		wal:     NewWal(walStorage),
+		config:  config,
+		storage: dbStorage,
 
-		wal:         wal,
-		commitQueue: make(chan TransactionCommitRequest, NUMBER_OF_PARALLEL_TRANSACTIONS),
+		freePages:    make(map[DatabaseVersion][]pager.PagePointer),
+		commitQueue:  make(chan TransactionCommit, NUMBER_OF_PARALLEL_TRANSACTIONS),
+		transactions: helpers.NewMinMap[DatabaseVersion, *Transaction](func(i, j DatabaseVersion) bool { return i < j }),
 	}
 
 	go db.collectCommits()
@@ -109,7 +102,7 @@ func (db *Database) StartTransaction(request func(*Transaction)) error {
 }
 
 func (db *Database) collectCommits() {
-	commits := make([]TransactionCommitRequest, 0, COMMIT_BATCH_SIZE)
+	commits := make([]TransactionCommit, 0, COMMIT_BATCH_SIZE)
 	ticker := time.NewTicker(COMMIT_INTERVAL)
 
 	for {
@@ -120,7 +113,7 @@ func (db *Database) collectCommits() {
 			if len(commits) == COMMIT_BATCH_SIZE {
 				ticker.Stop()
 				db.processCommits(commits)
-				commits = make([]TransactionCommitRequest, 0, COMMIT_BATCH_SIZE)
+				commits = make([]TransactionCommit, 0, COMMIT_BATCH_SIZE)
 				ticker.Reset(COMMIT_INTERVAL)
 			}
 
@@ -128,25 +121,31 @@ func (db *Database) collectCommits() {
 			if len(commits) > 0 {
 				ticker.Stop()
 				db.processCommits(commits)
-				commits = make([]TransactionCommitRequest, 0, COMMIT_BATCH_SIZE)
+				commits = make([]TransactionCommit, 0, COMMIT_BATCH_SIZE)
 				ticker.Reset(COMMIT_INTERVAL)
 			}
 		}
 	}
 }
 
-func (db *Database) processCommits(commits []TransactionCommitRequest) {
-	manager := NewTableManager(db)
+func (db *Database) processCommits(commits []TransactionCommit) {
+	var manager *TableManager
+	root := db.root
 
-	abortedCommits := make([]TransactionCommitRequest, 0)
-	approvedCommits := make([]TransactionCommitRequest, 0)
+	abortedCommits := make([]TransactionCommit, 0)
+	approvedCommits := make([]TransactionCommit, 0)
 
 	for _, commit := range commits {
+		allocator := pager.NewPageAllocator(db.storage, db.pagesCount, db.config.PageSize)
+		manager := NewTableManager(root, allocator)
+
 		if err := manager.ApplyChangeEvents(commit.ChangeEvents); err != nil {
 			abortedCommits = append(abortedCommits, commit)
 		} else {
 			approvedCommits = append(approvedCommits, commit)
 		}
+
+		root = manager.Root()
 	}
 
 	eventsToLog := make([]TableEvent, 0)
@@ -180,7 +179,7 @@ func (db *Database) processCommits(commits []TransactionCommitRequest) {
 	db.storage.Flush()
 }
 
-func (db *Database) abortCommits(commits []TransactionCommitRequest, err error) {
+func (db *Database) abortCommits(commits []TransactionCommit, err error) {
 	for _, commit := range commits {
 		commit.Response <- TransactionCommitResponse{
 			Error:   err,
@@ -189,7 +188,7 @@ func (db *Database) abortCommits(commits []TransactionCommitRequest, err error) 
 	}
 }
 
-func (db *Database) approveCommits(commits []TransactionCommitRequest) {
+func (db *Database) approveCommits(commits []TransactionCommit) {
 	for _, commit := range commits {
 		commit.Response <- TransactionCommitResponse{
 			Error:   nil,

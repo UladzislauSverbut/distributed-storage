@@ -8,15 +8,15 @@ type DeleteEntry struct {
 	Value     []byte
 }
 
-func (e *DeleteEntry) Name() string {
+func (event *DeleteEntry) Name() string {
 	return DELETE_ENTRY_EVENT
 }
 
-func (e *DeleteEntry) Serialize() []byte {
-	return []byte(e.Name() + "(TABLE=" + e.TableName + ",KEY=" + string(e.Key) + ")\n")
+func (event *DeleteEntry) Serialize() []byte {
+	return []byte(event.Name() + "(TABLE=" + event.TableName + ",KEY=" + string(event.Key) + ")\n")
 }
 
-func (e *DeleteEntry) Parse(data []byte) error {
+func (event *DeleteEntry) Parse(data []byte) error {
 	// Will be implemented in the future when we need to parse events from WAL.
 	return nil
 }

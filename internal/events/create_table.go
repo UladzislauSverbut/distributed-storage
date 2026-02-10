@@ -10,18 +10,14 @@ type CreateTable struct {
 	Schema    []byte // JSON-encoded TableSchema
 }
 
-func (e *CreateTable) Name() string {
+func (event *CreateTable) Name() string {
 	return CREATE_TABLE_EVENT
 }
 
-func (e *CreateTable) Serialize() []byte {
-	// Ensure schema is valid JSON; if not, best-effort marshal.
-	if !json.Valid(e.Schema) {
-		b, _ := json.Marshal(string(e.Schema))
-		return []byte(e.Name() + "(TABLE=" + e.TableName + ",SCHEMA=" + string(b) + ")\n")
-	}
+func (event *CreateTable) Serialize() []byte {
+	schema, _ := json.Marshal(string(event.Schema))
+	return []byte(event.Name() + "(TABLE=" + event.TableName + ",SCHEMA=" + string(schema) + ")\n")
 
-	return []byte(e.Name() + "(TABLE=" + e.TableName + ",SCHEMA=" + string(e.Schema) + ")\n")
 }
 
 func (e *CreateTable) Parse(data []byte) error {

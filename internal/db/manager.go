@@ -19,22 +19,21 @@ var catalogSchema = TableSchema{
 
 type TableManager struct {
 	catalog      *Table
+	events       []TableEvent
 	loadedTables map[string]*Table
-	allocator    *pager.PageAllocator
+
+	allocator *pager.PageAllocator
 }
 
-func NewTableManager(db *Database) *TableManager {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
-	allocator := pager.NewPageAllocator(db.storage, db.pagesCount, db.config.PageSize)
-	// The catalog is stored as a regular table with predefined schema, so it NewTable can't return error
-	catalog, _ := NewTable(db.root, allocator, &catalogSchema)
+func NewTableManager(root pager.PagePointer, allocator *pager.PageAllocator) *TableManager {
+	catalog, _ := NewTable(root, allocator, &catalogSchema)
 
 	return &TableManager{
 		catalog:      catalog,
+		events:       make([]TableEvent, 0),
 		loadedTables: make(map[string]*Table),
-		allocator:    allocator,
+
+		allocator: allocator,
 	}
 }
 
@@ -79,11 +78,23 @@ func (manager *TableManager) UpdateTable(name string, table *Table) error {
 		Set("definition", vals.NewString(string(stringifiedSchema))).
 		Set("root", vals.NewInt(table.Root()))
 
-	if err := manager.catalog.Upsert(schemaRecord); err != nil {
+	previousRecord, err := manager.catalog.Upsert(schemaRecord)
+	if err != nil {
 		return fmt.Errorf("Catalog: couldn't save table %s: %w", name, err)
+	}
+	if previousRecord == nil {
+		return fmt.Errorf("Catalog: couldn't update table %s because it doesn't exist in catalog", name)
 	}
 
 	manager.loadedTables[name] = table
+
+	manager.events = append(manager.events,
+		&events.UpdateTable{
+			TableName: table.Name(),
+			NewSchema: stringifiedSchema,
+			OldSchema: previousRecord.Get("definition").Serialize(),
+		})
+
 	return nil
 }
 
@@ -93,9 +104,19 @@ func (manager *TableManager) CreateTable(schema *TableSchema) (*Table, error) {
 		return nil, fmt.Errorf("Catalog: couldn't create table %s: %w", schema.Name, err)
 	}
 
-	if err := manager.UpdateTable(schema.Name, table); err != nil {
-		return nil, fmt.Errorf("Catalog: couldn't register table %s in catalog: %w", schema.Name, err)
+	stringifiedSchema, _ := json.Marshal(table.schema)
+
+	schemaRecord := vals.NewObject().
+		Set("name", vals.NewString(table.schema.Name)).
+		Set("definition", vals.NewString(string(stringifiedSchema))).
+		Set("root", vals.NewInt(table.Root()))
+
+	if err := manager.catalog.Insert(schemaRecord); err != nil {
+		return nil, fmt.Errorf("Catalog: couldn't create table %s: %w", schema.Name, err)
 	}
+
+	manager.loadedTables[schema.Name] = table
+	manager.events = append(manager.events, &events.CreateTable{TableName: table.Name(), Schema: stringifiedSchema})
 
 	return table, nil
 }
@@ -108,11 +129,13 @@ func (manager *TableManager) DeleteTable(name string) error {
 	}
 
 	delete(manager.loadedTables, name)
+	manager.events = append(manager.events, &events.DeleteTable{TableName: name})
+
 	return nil
 }
 
 func (manager *TableManager) ChangeEvents() []TableEvent {
-	events := make([]TableEvent, 0)
+	events := manager.events
 
 	for _, table := range manager.loadedTables {
 		tableEvents := table.ChangeEvents()

@@ -2,8 +2,7 @@ package db
 
 import (
 	"context"
-	"distributed-storage/internal/events"
-	"encoding/json"
+	"distributed-storage/internal/pager"
 	"fmt"
 	"sync/atomic"
 )
@@ -11,11 +10,12 @@ import (
 type TransactionID uint64
 type TransactionState int
 
-type TransactionCommitRequest struct {
-	TransactionID TransactionID
-	ReadEvents    []TableEvent
-	ChangeEvents  []TableEvent
-	Response      chan<- TransactionCommitResponse
+type TransactionCommit struct {
+	DatabaseVersion DatabaseVersion
+	TransactionID   TransactionID
+	ReadEvents      []TableEvent
+	ChangeEvents    []TableEvent
+	Response        chan<- TransactionCommitResponse
 }
 
 type TransactionCommitResponse struct {
@@ -24,13 +24,12 @@ type TransactionCommitResponse struct {
 }
 
 type Transaction struct {
-	id           TransactionID
-	state        TransactionState
-	manager      *TableManager
-	changeEvents []TableEvent
-	readEvents   []TableEvent
+	id      TransactionID
+	version DatabaseVersion
+	state   TransactionState
+	manager *TableManager
 
-	commitQueue chan<- TransactionCommitRequest
+	commitQueue chan<- TransactionCommit
 	ctx         context.Context
 }
 
@@ -42,19 +41,26 @@ const (
 )
 
 func NewTransaction(db *Database, ctx context.Context) (*Transaction, error) {
+	db.mu.RLock()
+	storage := db.storage
+	pagesCount := db.pagesCount
+	pageSize := db.config.PageSize
+	db.mu.RUnlock()
+
 	tx := &Transaction{
-		id: TransactionID(atomic.AddUint64((*uint64)(&db.nextTransactionID), 1)),
+		id:      TransactionID(atomic.AddUint64((*uint64)(&db.nextTransactionID), 1)),
+		version: db.version,
 
 		state:   ACTIVE,
-		manager: NewTableManager(db),
+		manager: NewTableManager(db.root, pager.NewPageAllocator(storage, pagesCount, pageSize)),
 
 		commitQueue: db.commitQueue,
 		ctx:         ctx,
 	}
 
 	db.mu.Lock()
-	defer db.mu.Unlock()
-	db.transactions[tx.id] = tx
+	db.transactions.Add(db.version, tx)
+	db.mu.Unlock()
 
 	return tx, nil
 }
@@ -74,7 +80,7 @@ func (tx *Transaction) Commit() (err error) {
 	}
 
 	// If there is nothing to write, then just return
-	if len(tx.changeEvents) == 0 {
+	if len(tx.manager.ChangeEvents()) == 0 {
 		tx.markCommitted()
 		return nil
 	}
@@ -82,10 +88,9 @@ func (tx *Transaction) Commit() (err error) {
 	// Create channel to get response from db writer
 	responseChannel := make(chan TransactionCommitResponse, 1)
 
-	tx.commitQueue <- TransactionCommitRequest{
+	tx.commitQueue <- TransactionCommit{
 		TransactionID: tx.id,
-		ChangeEvents:  tx.changeEvents,
-		ReadEvents:    tx.readEvents,
+		ChangeEvents:  tx.manager.ChangeEvents(),
 		Response:      responseChannel,
 	}
 
@@ -131,13 +136,6 @@ func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because of error during creating table: %w", schema.Name, err)
 	}
-
-	stringifiedSchema, _ := json.Marshal(schema)
-
-	tx.changeEvents = append(tx.changeEvents, &events.CreateTable{
-		TableName: table.Name(),
-		Schema:    stringifiedSchema,
-	})
 
 	return table, nil
 }

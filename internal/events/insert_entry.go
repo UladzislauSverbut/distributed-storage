@@ -8,12 +8,12 @@ type InsertEntry struct {
 	Value     []byte
 }
 
-func (e *InsertEntry) Name() string {
+func (event *InsertEntry) Name() string {
 	return INSERT_ENTRY_EVENT
 }
 
-func (e *InsertEntry) Serialize() []byte {
-	return []byte(e.Name() + "(TABLE=" + e.TableName + ",KEY=" + string(e.Key) + ",VALUE=" + string(e.Value) + ")\n")
+func (event *InsertEntry) Serialize() []byte {
+	return []byte(event.Name() + "(TABLE=" + event.TableName + ",KEY=" + string(event.Key) + ",VALUE=" + string(event.Value) + ")\n")
 }
 
 func (e *InsertEntry) Parse(data []byte) error {

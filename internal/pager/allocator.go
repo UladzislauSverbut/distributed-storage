@@ -27,7 +27,7 @@ type PageAllocator struct {
 	state   PageAllocatorState
 }
 
-func NewPageAllocator(storage store.Storage, pagesNumber uint64, pageSize int) *PageAllocator {
+func NewPageAllocator(storage store.Storage, pagesNumber uint64, pageSize int, availablePages ...PagePointer) *PageAllocator {
 	allocator := &PageAllocator{
 		storage: storage,
 		config: PageAllocatorConfig{
@@ -35,8 +35,8 @@ func NewPageAllocator(storage store.Storage, pagesNumber uint64, pageSize int) *
 		},
 		state: PageAllocatorState{
 			AllocatedPages: helpers.NewSet[PagePointer](),
-			ReusablePages:  helpers.NewSet[PagePointer](),
 			ReleasedPages:  helpers.NewSet[PagePointer](),
+			ReusablePages:  helpers.NewSet(availablePages...),
 			TotalPages:     pagesNumber,
 			pageUpdates:    map[PagePointer][]byte{},
 		},

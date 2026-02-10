@@ -9,15 +9,15 @@ type UpdateEntry struct {
 	OldValue  []byte
 }
 
-func (e *UpdateEntry) Name() string {
+func (event *UpdateEntry) Name() string {
 	return UPDATE_ENTRY_EVENT
 }
 
-func (e *UpdateEntry) Serialize() []byte {
-	return []byte(e.Name() + "(TABLE=" + e.TableName + ",KEY=" + string(e.Key) + ",OLD_VALUE=" + string(e.OldValue) + ",NEW_VALUE=" + string(e.NewValue) + ")\n")
+func (event *UpdateEntry) Serialize() []byte {
+	return []byte(event.Name() + "(TABLE=" + event.TableName + ",KEY=" + string(event.Key) + ",OLD_VALUE=" + string(event.OldValue) + ",NEW_VALUE=" + string(event.NewValue) + ")\n")
 }
 
-func (e *UpdateEntry) Parse(data []byte) error {
+func (event *UpdateEntry) Parse(data []byte) error {
 	// Will be implemented in the future when we need to parse events from WAL.
 	return nil
 }
