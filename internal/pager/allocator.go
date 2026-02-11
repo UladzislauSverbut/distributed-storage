@@ -14,11 +14,11 @@ type PageAllocatorConfig struct {
 }
 
 type PageAllocatorState struct {
-	AllocatedPages helpers.Set[PagePointer] // set of pages that were created on demand
-	ReusablePages  helpers.Set[PagePointer] // set of pages that are available to reuse
-	ReleasedPages  helpers.Set[PagePointer] // set of pages that were released and cannot be reused due to immutability
-	TotalPages     uint64                   // total number of pages in storage
-	pageUpdates    map[PagePointer][]byte   // map of page updates that will be synced with storage
+	TotalPages    uint64                   // total number of pages in storage
+	PagePool      helpers.Set[PagePointer] // total set of pages that are not reachable by others and could be reused
+	ReusablePages helpers.Set[PagePointer] // set of pages that are prepared for reuse
+	ReleasedPages helpers.Set[PagePointer] // set of pages that were released and cannot be overwritten due to immutability
+	pageUpdates   map[PagePointer][]byte   // map of page updates that will be synced with storage
 }
 
 type PageAllocator struct {
@@ -34,11 +34,11 @@ func NewPageAllocator(storage store.Storage, pagesNumber uint64, pageSize int, a
 			pageSize: pageSize,
 		},
 		state: PageAllocatorState{
-			AllocatedPages: helpers.NewSet[PagePointer](),
-			ReleasedPages:  helpers.NewSet[PagePointer](),
-			ReusablePages:  helpers.NewSet(availablePages...),
-			TotalPages:     pagesNumber,
-			pageUpdates:    map[PagePointer][]byte{},
+			TotalPages:    pagesNumber,
+			PagePool:      helpers.NewSet(availablePages...),
+			ReusablePages: helpers.NewSet(availablePages...),
+			ReleasedPages: helpers.NewSet[PagePointer](),
+			pageUpdates:   map[PagePointer][]byte{},
 		},
 	}
 
@@ -62,7 +62,7 @@ func (allocator *PageAllocator) CreatePage(data []byte) PagePointer {
 		allocator.state.TotalPages++
 
 		pagePointer = allocator.state.TotalPages
-		allocator.state.AllocatedPages.Add(pagePointer)
+		allocator.state.PagePool.Add(pagePointer)
 	}
 
 	allocator.state.pageUpdates[pagePointer] = data
@@ -70,8 +70,8 @@ func (allocator *PageAllocator) CreatePage(data []byte) PagePointer {
 }
 
 func (allocator *PageAllocator) FreePage(pointer PagePointer) {
-	// If released page was allocated than we can return it to free pages because nobody can reference this page
-	if allocator.state.AllocatedPages.Has(pointer) {
+	// If released page was in page pool than we can return it to reusable pages because nobody can reference this page
+	if allocator.state.PagePool.Has(pointer) {
 		allocator.state.ReusablePages.Add(pointer)
 	} else {
 		allocator.state.ReleasedPages.Add(pointer)
@@ -84,8 +84,8 @@ func (allocator *PageAllocator) ReleasedPages() []PagePointer {
 	return allocator.state.ReleasedPages.Values()
 }
 
-func (allocator *PageAllocator) AllocatedPages() []PagePointer {
-	return allocator.state.AllocatedPages.Values()
+func (allocator *PageAllocator) ReusablePages() []PagePointer {
+	return allocator.state.ReusablePages.Values()
 }
 
 func (allocator *PageAllocator) TotalPages() uint64 {

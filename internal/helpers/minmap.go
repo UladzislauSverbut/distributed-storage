@@ -30,6 +30,15 @@ func (m *MinMap[Key, Value]) Add(key Key, value Value) {
 	m.items[key] = append(m.items[key], value)
 }
 
+func (m *MinMap[Key, Value]) AddMultiple(key Key, values []Value) ([]Value, bool) {
+	if _, exists := m.items[key]; !exists {
+		heap.Push(&m.heap, key)
+	}
+
+	m.items[key] = append(m.items[key], values...)
+	return m.items[key], true
+}
+
 func (m *MinMap[Key, Value]) Get(key Key) ([]Value, bool) {
 	values, ok := m.items[key]
 	return values, ok

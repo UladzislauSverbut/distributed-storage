@@ -34,9 +34,9 @@ type Database struct {
 	config  *DatabaseConfig
 	storage store.Storage
 
-	freePages    map[DatabaseVersion][]pager.PagePointer
-	commitQueue  chan TransactionCommit
+	pagePool     *helpers.MinMap[DatabaseVersion, pager.PagePointer]
 	transactions *helpers.MinMap[DatabaseVersion, *Transaction]
+	commitQueue  chan TransactionCommit
 
 	mu sync.RWMutex
 }
@@ -73,9 +73,9 @@ func NewDatabase(config *DatabaseConfig) (*Database, error) {
 		config:  config,
 		storage: dbStorage,
 
-		freePages:    make(map[DatabaseVersion][]pager.PagePointer),
-		commitQueue:  make(chan TransactionCommit, NUMBER_OF_PARALLEL_TRANSACTIONS),
+		pagePool:     helpers.NewMinMap[DatabaseVersion, pager.PagePointer](func(i, j DatabaseVersion) bool { return i < j }),
 		transactions: helpers.NewMinMap[DatabaseVersion, *Transaction](func(i, j DatabaseVersion) bool { return i < j }),
+		commitQueue:  make(chan TransactionCommit, NUMBER_OF_PARALLEL_TRANSACTIONS),
 	}
 
 	go db.collectCommits()
@@ -129,23 +129,20 @@ func (db *Database) collectCommits() {
 }
 
 func (db *Database) processCommits(commits []TransactionCommit) {
-	var manager *TableManager
-	root := db.root
+	dbVersion := db.minimalActiveVersion()
+	availablePages := db.unreachablePages(dbVersion)
+	allocator := pager.NewPageAllocator(db.storage, db.pagesCount, db.config.PageSize, availablePages...)
+	manager := NewTableManager(db.root, allocator)
 
 	abortedCommits := make([]TransactionCommit, 0)
 	approvedCommits := make([]TransactionCommit, 0)
 
 	for _, commit := range commits {
-		allocator := pager.NewPageAllocator(db.storage, db.pagesCount, db.config.PageSize)
-		manager := NewTableManager(root, allocator)
-
 		if err := manager.ApplyChangeEvents(commit.ChangeEvents); err != nil {
 			abortedCommits = append(abortedCommits, commit)
 		} else {
 			approvedCommits = append(approvedCommits, commit)
 		}
-
-		root = manager.Root()
 	}
 
 	eventsToLog := make([]TableEvent, 0)
@@ -168,13 +165,15 @@ func (db *Database) processCommits(commits []TransactionCommit) {
 
 	db.approveCommits(approvedCommits)
 
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
 	db.root = manager.Root()
 	db.pagesCount = manager.allocator.TotalPages()
+	db.markPagesUnreachable(db.version, manager.allocator.ReleasedPages())
+
+	db.version++
 
 	db.storage.UpdateMemorySegment(0, buildHeader(db.root, db.nextTransactionID, db.pagesCount))
+
+	fmt.Printf("db version %d, pages count %d, released pages %d, reusable pages %d\n", db.version, db.pagesCount, manager.allocator.ReleasedPages(), manager.allocator.ReusablePages())
 
 	db.storage.Flush()
 }
@@ -195,4 +194,35 @@ func (db *Database) approveCommits(commits []TransactionCommit) {
 			Success: true,
 		}
 	}
+}
+
+func (db *Database) unreachablePages(usedVersion DatabaseVersion) []pager.PagePointer {
+	unreachablePages := make([]pager.PagePointer, 0)
+
+	for {
+		if version, _, ok := db.pagePool.PeekMin(); ok || version > usedVersion {
+			_, pages, _ := db.pagePool.PopMin()
+			unreachablePages = append(unreachablePages, pages...)
+		} else {
+			return unreachablePages
+		}
+	}
+}
+
+func (db *Database) markPagesUnreachable(version DatabaseVersion, pages []pager.PagePointer) {
+	db.pagePool.AddMultiple(version, pages)
+}
+
+func (db *Database) minimalActiveVersion() DatabaseVersion {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if version, _, ok := db.transactions.PeekMin(); ok {
+
+		fmt.Printf("Minimal version %d\n", version)
+		return version
+	}
+
+	fmt.Printf("Minimal version %d\n", db.version)
+
+	return db.version
 }

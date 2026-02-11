@@ -48,6 +48,10 @@ func (s *Set[T]) Remove(element T) {
 }
 
 func (s *Set[T]) Has(element T) bool {
+	if s.elements == nil {
+		return false
+	}
+
 	_, exists := s.elements[element]
 	return exists
 }
