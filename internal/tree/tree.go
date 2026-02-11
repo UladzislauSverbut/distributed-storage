@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"distributed-storage/internal/pager"
 	"fmt"
-	"log"
 )
 
 type TreeConfig struct {
@@ -130,8 +129,7 @@ func (tree *Tree) getKeyValue(node *Node, key []byte) []byte {
 		}
 	default:
 		{
-			log.Printf("Unsupported node type %d", node.getType())
-			return nil
+			panic(fmt.Sprintf("Unsupported node type %d", node.getType()))
 		}
 	}
 }
@@ -155,8 +153,7 @@ func (tree *Tree) setKeyValue(node *Node, key []byte, value []byte) (*Node, []by
 		}
 	default:
 		{
-			log.Printf("Unsupported node type %d", node.getType())
-			return node, nil
+			panic(fmt.Sprintf("Unsupported node type %d", node.getType()))
 		}
 	}
 }
@@ -173,8 +170,7 @@ func (tree *Tree) deleteKeyValue(node *Node, key []byte) (*Node, []byte) {
 		}
 	default:
 		{
-			log.Printf("Unsupported node type %d", node.getType())
-			return node, nil
+			panic(fmt.Sprintf("Unsupported node type %d", node.getType()))
 		}
 	}
 }

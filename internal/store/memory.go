@@ -15,12 +15,16 @@ type MemoryStorage struct {
 	mu sync.RWMutex
 }
 
-func NewMemoryStorage() *MemoryStorage {
-	return &MemoryStorage{
+func NewMemoryStorage(initialSize int) *MemoryStorage {
+	storage := &MemoryStorage{
 		memory: [][]byte{},
 		size:   0,
 		offset: 0,
 	}
+
+	storage.ensureSize(initialSize)
+
+	return storage
 }
 
 func (storage *MemoryStorage) Flush() error {

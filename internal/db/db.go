@@ -173,8 +173,6 @@ func (db *Database) processCommits(commits []TransactionCommit) {
 
 	db.storage.UpdateMemorySegment(0, buildHeader(db.root, db.nextTransactionID, db.pagesCount))
 
-	fmt.Printf("db version %d, pages count %d, released pages %d, reusable pages %d\n", db.version, db.pagesCount, manager.allocator.ReleasedPages(), manager.allocator.ReusablePages())
-
 	db.storage.Flush()
 }
 
@@ -197,14 +195,14 @@ func (db *Database) approveCommits(commits []TransactionCommit) {
 }
 
 func (db *Database) unreachablePages(usedVersion DatabaseVersion) []pager.PagePointer {
-	unreachablePages := make([]pager.PagePointer, 0)
+	pages := make([]pager.PagePointer, 0)
 
 	for {
-		if version, _, ok := db.pagePool.PeekMin(); ok || version > usedVersion {
-			_, pages, _ := db.pagePool.PopMin()
-			unreachablePages = append(unreachablePages, pages...)
+		if version, _, ok := db.pagePool.PeekMin(); ok && version > usedVersion {
+			_, unreachablePages, _ := db.pagePool.PopMin()
+			pages = append(pages, unreachablePages...)
 		} else {
-			return unreachablePages
+			return pages
 		}
 	}
 }
@@ -217,12 +215,8 @@ func (db *Database) minimalActiveVersion() DatabaseVersion {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	if version, _, ok := db.transactions.PeekMin(); ok {
-
-		fmt.Printf("Minimal version %d\n", version)
 		return version
 	}
-
-	fmt.Printf("Minimal version %d\n", db.version)
 
 	return db.version
 }
