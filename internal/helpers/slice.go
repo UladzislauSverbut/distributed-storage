@@ -35,10 +35,6 @@ func ReadSegments[T comparable](segments [][]T, offset int, size int) []T {
 	blockStart := 0
 
 	for _, segment := range segments {
-		if offset < 0 {
-			break
-		}
-
 		if offset >= len(segment) {
 			offset -= len(segment)
 			continue
@@ -49,7 +45,12 @@ func ReadSegments[T comparable](segments [][]T, offset int, size int) []T {
 		copy(block[blockStart:blockStart+blockEnd], segment[offset:offset+blockEnd])
 
 		blockStart += blockEnd
-		offset -= blockStart
+
+		if blockStart == size {
+			break
+		}
+
+		offset = 0
 	}
 
 	return block

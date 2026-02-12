@@ -94,10 +94,8 @@ func (allocator *PageAllocator) TotalPages() uint64 {
 
 func (allocator *PageAllocator) Save() error {
 	for pointer, page := range allocator.state.pageUpdates {
-		if page != nil {
-			if err := allocator.storage.UpdateMemorySegment(int(pointer)*allocator.config.pageSize, page[0:allocator.config.pageSize]); err != nil {
-				return err
-			}
+		if err := allocator.storage.UpdateMemorySegment(int(pointer)*allocator.config.pageSize, page[0:allocator.config.pageSize]); err != nil {
+			return err
 		}
 	}
 

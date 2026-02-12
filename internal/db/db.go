@@ -165,11 +165,14 @@ func (db *Database) processCommits(commits []TransactionCommit) {
 
 	db.approveCommits(approvedCommits)
 
+	db.mu.Lock()
 	db.root = manager.Root()
 	db.pagesCount = manager.allocator.TotalPages()
-	db.markPagesUnreachable(db.version, manager.allocator.ReleasedPages())
-
 	db.version++
+	db.mu.Unlock()
+
+	db.markPagesUnreachable(db.version, manager.allocator.ReleasedPages())
+	db.markPagesUnreachable(dbVersion-1, manager.allocator.ReusablePages())
 
 	db.storage.UpdateMemorySegment(0, buildHeader(db.root, db.nextTransactionID, db.pagesCount))
 
@@ -198,7 +201,7 @@ func (db *Database) unreachablePages(usedVersion DatabaseVersion) []pager.PagePo
 	pages := make([]pager.PagePointer, 0)
 
 	for {
-		if version, _, ok := db.pagePool.PeekMin(); ok && version > usedVersion {
+		if version, _, ok := db.pagePool.PeekMin(); ok && version < usedVersion {
 			_, unreachablePages, _ := db.pagePool.PopMin()
 			pages = append(pages, unreachablePages...)
 		} else {
@@ -212,11 +215,21 @@ func (db *Database) markPagesUnreachable(version DatabaseVersion, pages []pager.
 }
 
 func (db *Database) minimalActiveVersion() DatabaseVersion {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	if version, _, ok := db.transactions.PeekMin(); ok {
-		return version
-	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
-	return db.version
+	for {
+		version, transactions, ok := db.transactions.PeekMin()
+		if !ok {
+			return db.version
+		}
+
+		for _, transaction := range transactions {
+			if transaction.IsActive() {
+				return version
+			}
+		}
+
+		db.transactions.PopMin()
+	}
 }

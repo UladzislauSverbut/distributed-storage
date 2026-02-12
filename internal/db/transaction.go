@@ -34,7 +34,7 @@ type Transaction struct {
 }
 
 const (
-	ACTIVE TransactionState = iota
+	PROCESSING TransactionState = iota
 	COMMITTING
 	COMMITTED
 	ABORTED
@@ -42,24 +42,28 @@ const (
 
 func NewTransaction(db *Database, ctx context.Context) (*Transaction, error) {
 	db.mu.RLock()
-	storage := db.storage
+	root := db.root
+	version := db.version
+
 	pagesCount := db.pagesCount
 	pageSize := db.config.PageSize
+
+	storage := db.storage
 	db.mu.RUnlock()
 
 	tx := &Transaction{
 		id:      TransactionID(atomic.AddUint64((*uint64)(&db.nextTransactionID), 1)),
-		version: db.version,
+		version: version,
 
-		state:   ACTIVE,
-		manager: NewTableManager(db.root, pager.NewPageAllocator(storage, pagesCount, pageSize)),
+		state:   PROCESSING,
+		manager: NewTableManager(root, pager.NewPageAllocator(storage, pagesCount, pageSize)),
 
 		commitQueue: db.commitQueue,
 		ctx:         ctx,
 	}
 
 	db.mu.Lock()
-	db.transactions.Add(db.version, tx)
+	db.transactions.Add(version, tx)
 	db.mu.Unlock()
 
 	return tx, nil
@@ -140,8 +144,12 @@ func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
 	return table, nil
 }
 
+func (tx *Transaction) IsActive() bool {
+	return tx.state == PROCESSING || tx.state == COMMITTING
+}
+
 func (tx *Transaction) markCommitting() bool {
-	if tx.state != ACTIVE {
+	if tx.state != PROCESSING {
 		return false
 	}
 
