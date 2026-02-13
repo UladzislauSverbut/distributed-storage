@@ -9,8 +9,12 @@ import (
 const FREE_PAGES_EVENT = "FREE_PAGES"
 
 type FreePages struct {
-	TxID  uint64
-	Pages []pager.PagePointer
+	Version uint64
+	Pages   []pager.PagePointer
+}
+
+func NewFreePages(dbVersion uint64, pages []pager.PagePointer) *FreePages {
+	return &FreePages{Version: dbVersion, Pages: pages}
 }
 
 func (event *FreePages) Name() string {
@@ -18,7 +22,7 @@ func (event *FreePages) Name() string {
 }
 
 func (event *FreePages) Serialize() []byte {
-	return []byte(event.Name() + "(PAGES=" + helpers.StringifySlice(event.Pages, func(page uint64) string { return strconv.FormatUint(page, 10) }, ",") + ")\n")
+	return []byte(event.Name() + "(DB_V=" + strconv.FormatUint(event.Version, 10) + ",PAGES=" + helpers.JoinFunc(event.Pages, func(page uint64) string { return strconv.FormatUint(page, 10) }, ",") + ")\n")
 }
 
 func (event *FreePages) Parse(data []byte) error {

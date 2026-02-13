@@ -10,6 +10,10 @@ type CreateTable struct {
 	Schema    []byte // JSON-encoded TableSchema
 }
 
+func NewCreateTable(tableName string, schema []byte) *CreateTable {
+	return &CreateTable{TableName: tableName, Schema: schema}
+}
+
 func (event *CreateTable) Name() string {
 	return CREATE_TABLE_EVENT
 }

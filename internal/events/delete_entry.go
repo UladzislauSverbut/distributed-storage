@@ -8,6 +8,10 @@ type DeleteEntry struct {
 	Value     []byte
 }
 
+func NewDeleteEntry(tableName string, key []byte, value []byte) *DeleteEntry {
+	return &DeleteEntry{TableName: tableName, Key: key, Value: value}
+}
+
 func (event *DeleteEntry) Name() string {
 	return DELETE_ENTRY_EVENT
 }

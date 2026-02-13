@@ -1,12 +1,13 @@
 package events
 
-import "distributed-storage/internal/pager"
-
 const DELETE_TABLE_EVENT = "DELETE_TABLE"
 
 type DeleteTable struct {
 	TableName string
-	TableRoot pager.PagePointer
+}
+
+func NewDeleteTable(tableName string) *DeleteTable {
+	return &DeleteTable{TableName: tableName}
 }
 
 func (event *DeleteTable) Name() string {

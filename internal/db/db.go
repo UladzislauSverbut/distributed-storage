@@ -2,22 +2,23 @@ package db
 
 import (
 	"context"
-	"distributed-storage/internal/events"
 	"distributed-storage/internal/helpers"
 	"distributed-storage/internal/pager"
 	"distributed-storage/internal/store"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-const DEFAULT_DIRECTORY = "/var/lib/kv"
-const DEFAULT_PAGE_SIZE = 16 * 1024 // 16KB
-const HEADER_SIZE = 24
+const DB_STORAGE_SIGNATURE = "DISTRIBUTED_DB_STORAGE" // Signature to identify and validate database storage file
+const HEADER_SIZE = len(DB_STORAGE_SIGNATURE) + 32
 
 // bytes
-const NUMBER_OF_PARALLEL_TRANSACTIONS = 1024 // max number of parallel transactions
-const COMMIT_BATCH_SIZE = 256                // number of transactions to commit in a single batch
+const NUMBER_OF_PARALLEL_TRANSACTIONS = 1024 // Max number of parallel transactions
+const COMMIT_BATCH_SIZE = 256                // Number of transactions to commit in a single batch
 
 const TRANSACTION_TIMEOUT = 30 * time.Minute
 const COMMIT_INTERVAL = 10 * time.Millisecond
@@ -28,10 +29,10 @@ type Database struct {
 	root              pager.PagePointer
 	version           DatabaseVersion
 	pagesCount        uint64
-	nextTransactionID TransactionID
+	nextTransactionID atomic.Uint64 // Alias for TransactionID, but using atomic for thread-safe incrementing
 
-	wal     *Wal
-	config  *DatabaseConfig
+	wal     *WAL
+	config  DatabaseConfig
 	storage store.Storage
 
 	pagePool     *helpers.MinMap[DatabaseVersion, pager.PagePointer]
@@ -47,29 +48,16 @@ type DatabaseConfig struct {
 	PageSize  int
 }
 
-func NewDatabase(config *DatabaseConfig) (*Database, error) {
-	if config.Directory == "" {
-		config.Directory = DEFAULT_DIRECTORY
-	}
-
-	if config.PageSize == 0 {
-		config.PageSize = DEFAULT_PAGE_SIZE
-	}
-
+func NewDatabase(config DatabaseConfig) (*Database, error) {
+	config = applyDefaults(config)
 	walStorage, dbStorage, err := setupStorage(config)
 
 	if err != nil {
 		return nil, err
 	}
 
-	root, nextTransactionID, pagesCount := parseHeader(dbStorage.MemorySegment(0, HEADER_SIZE))
-
 	db := &Database{
-		root:              root,
-		pagesCount:        pagesCount,
-		nextTransactionID: nextTransactionID,
-
-		wal:     NewWal(walStorage),
+		wal:     NewWAL(walStorage),
 		config:  config,
 		storage: dbStorage,
 
@@ -78,7 +66,15 @@ func NewDatabase(config *DatabaseConfig) (*Database, error) {
 		commitQueue:  make(chan TransactionCommit, NUMBER_OF_PARALLEL_TRANSACTIONS),
 	}
 
-	go db.collectCommits()
+	if err := db.readHeader(); err != nil {
+		return nil, err
+	}
+
+	if err := db.recoverFromWAL(); err != nil {
+		return nil, err
+	}
+
+	go db.runCommitLoop()
 
 	return db, nil
 }
@@ -101,135 +97,193 @@ func (db *Database) StartTransaction(request func(*Transaction)) error {
 	return nil
 }
 
-func (db *Database) collectCommits() {
-	commits := make([]TransactionCommit, 0, COMMIT_BATCH_SIZE)
+func (db *Database) runCommitLoop() {
+	transactions := make([]TransactionCommit, 0, COMMIT_BATCH_SIZE)
 	ticker := time.NewTicker(COMMIT_INTERVAL)
 
 	for {
 		select {
 		case commit := <-db.commitQueue:
-			commits = append(commits, commit)
+			transactions = append(transactions, commit)
 
-			if len(commits) == COMMIT_BATCH_SIZE {
+			if len(transactions) == COMMIT_BATCH_SIZE {
 				ticker.Stop()
-				db.processCommits(commits)
-				commits = make([]TransactionCommit, 0, COMMIT_BATCH_SIZE)
+				db.commitBatch(transactions)
+				transactions = make([]TransactionCommit, 0, COMMIT_BATCH_SIZE)
 				ticker.Reset(COMMIT_INTERVAL)
 			}
 
 		case <-ticker.C:
-			if len(commits) > 0 {
+			if len(transactions) > 0 {
 				ticker.Stop()
-				db.processCommits(commits)
-				commits = make([]TransactionCommit, 0, COMMIT_BATCH_SIZE)
+				db.commitBatch(transactions)
+				transactions = make([]TransactionCommit, 0, COMMIT_BATCH_SIZE)
 				ticker.Reset(COMMIT_INTERVAL)
 			}
 		}
 	}
 }
 
-func (db *Database) processCommits(commits []TransactionCommit) {
-	dbVersion := db.minimalActiveVersion()
-	availablePages := db.unreachablePages(dbVersion)
-	allocator := pager.NewPageAllocator(db.storage, db.pagesCount, db.config.PageSize, availablePages...)
+func (db *Database) commitBatch(transactions []TransactionCommit) {
+	latestUnreachableVersion := db.latestUnreachableVersion()
+
+	allocator := pager.NewPageAllocator(db.storage, db.pagesCount, db.config.PageSize, db.collectReleasedPages(latestUnreachableVersion)...)
 	manager := NewTableManager(db.root, allocator)
 
-	abortedCommits := make([]TransactionCommit, 0)
-	approvedCommits := make([]TransactionCommit, 0)
+	abortedTransactions := make([]TransactionCommit, 0)
+	approvedTransactions := make([]TransactionCommit, 0)
 
-	for _, commit := range commits {
-		if err := manager.ApplyChangeEvents(commit.ChangeEvents); err != nil {
-			abortedCommits = append(abortedCommits, commit)
+	for _, transaction := range transactions {
+		if err := manager.ApplyChangeEvents(transaction.ChangeEvents); err != nil {
+			abortedTransactions = append(abortedTransactions, transaction)
 		} else {
-			approvedCommits = append(approvedCommits, commit)
+			approvedTransactions = append(approvedTransactions, transaction)
 		}
 	}
 
-	eventsToLog := make([]TableEvent, 0)
-
-	for _, commit := range approvedCommits {
-		eventsToLog = append(eventsToLog, &events.StartTransaction{ID: uint64(commit.TransactionID)})
-		eventsToLog = append(eventsToLog, commit.ChangeEvents...)
-		eventsToLog = append(eventsToLog, &events.CommitTransaction{ID: uint64(commit.TransactionID)})
-	}
-
-	if err := db.wal.Write(eventsToLog); err != nil {
-		db.abortCommits(commits, fmt.Errorf("WAL write failed: %w", err))
+	if err := manager.WriteTables(); err != nil {
+		db.rejectTransactions(transactions, fmt.Errorf("Catalog persist failed: %w", err))
 		return
 	}
 
-	if err := manager.PersistTables(); err != nil {
-		db.abortCommits(commits, fmt.Errorf("Catalog persist failed: %w", err))
+	releasedPages := allocator.ReleasedPages() // These pages will be ready to safely reused only since next db version since they can be still used by active transactions in the current version
+	reusablePages := allocator.ReusablePages() // These pages can be reused because they are not used by any active transaction (e.g. they were allocated and released in the same version)
+
+	db.wal.WriteTransactions(transactions)
+	db.wal.WriteFreePages(latestUnreachableVersion, reusablePages)
+	db.wal.WriteFreePages(db.version+1, releasedPages)
+	db.wal.WriteVersion(db.version + 1)
+
+	if err := db.wal.Flush(); err != nil {
+		db.rejectTransactions(transactions, fmt.Errorf("WAL flush failed: %w", err))
 		return
 	}
 
-	db.approveCommits(approvedCommits)
+	db.releasePages(latestUnreachableVersion, reusablePages)
+	db.releasePages(db.version+1, releasedPages)
+
+	db.approveTransactions(approvedTransactions)
 
 	db.mu.Lock()
 	db.root = manager.Root()
-	db.pagesCount = manager.allocator.TotalPages()
+	db.pagesCount = allocator.TotalPages()
 	db.version++
 	db.mu.Unlock()
-
-	db.markPagesUnreachable(db.version, manager.allocator.ReleasedPages())
-	db.markPagesUnreachable(dbVersion-1, manager.allocator.ReusablePages())
-
-	db.storage.UpdateMemorySegment(0, buildHeader(db.root, db.nextTransactionID, db.pagesCount))
-
-	db.storage.Flush()
 }
 
-func (db *Database) abortCommits(commits []TransactionCommit, err error) {
-	for _, commit := range commits {
-		commit.Response <- TransactionCommitResponse{
+func (db *Database) rejectTransactions(transactions []TransactionCommit, err error) {
+	for _, transaction := range transactions {
+		transaction.Response <- TransactionCommitResponse{
 			Error:   err,
 			Success: false,
 		}
 	}
 }
 
-func (db *Database) approveCommits(commits []TransactionCommit) {
-	for _, commit := range commits {
-		commit.Response <- TransactionCommitResponse{
+func (db *Database) approveTransactions(transactions []TransactionCommit) {
+	for _, transaction := range transactions {
+		transaction.Response <- TransactionCommitResponse{
 			Error:   nil,
 			Success: true,
 		}
 	}
 }
 
-func (db *Database) unreachablePages(usedVersion DatabaseVersion) []pager.PagePointer {
+func (db *Database) collectReleasedPages(target DatabaseVersion) []pager.PagePointer {
 	pages := make([]pager.PagePointer, 0)
 
 	for {
-		if version, _, ok := db.pagePool.PeekMin(); ok && version < usedVersion {
-			_, unreachablePages, _ := db.pagePool.PopMin()
-			pages = append(pages, unreachablePages...)
+		if version, _, ok := db.pagePool.PeekMin(); ok && version <= target {
+			_, freedPages, _ := db.pagePool.PopMin()
+			pages = append(pages, freedPages...)
 		} else {
 			return pages
 		}
 	}
 }
 
-func (db *Database) markPagesUnreachable(version DatabaseVersion, pages []pager.PagePointer) {
+func (db *Database) releasePages(version DatabaseVersion, pages []pager.PagePointer) {
 	db.pagePool.AddMultiple(version, pages)
 }
 
-func (db *Database) minimalActiveVersion() DatabaseVersion {
+func (db *Database) latestUnreachableVersion() DatabaseVersion {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	for {
 		version, transactions, ok := db.transactions.PeekMin()
 		if !ok {
-			return db.version
+			return db.version - 1
 		}
 
 		for _, transaction := range transactions {
 			if transaction.IsActive() {
-				return version
+				return version - 1
 			}
 		}
 
 		db.transactions.PopMin()
 	}
+}
+
+func (db *Database) readHeader() error {
+	header := db.storage.MemorySegment(0, HEADER_SIZE)
+	signature := header[0:len(DB_STORAGE_SIGNATURE)]
+
+	if helpers.IsZero(signature) {
+		db.root = pager.NULL_PAGE
+		db.version = 1
+		db.pagesCount = 1 // reserve page for header
+		db.nextTransactionID.Store(1)
+
+		return nil
+	}
+
+	if string(signature) != DB_STORAGE_SIGNATURE {
+		return errors.New("Database: couldn't parse storage file because of corrupted file")
+	}
+
+	signatureSize := len(DB_STORAGE_SIGNATURE)
+
+	db.mu.Lock()
+	db.root = pager.PagePointer(binary.LittleEndian.Uint64(header[signatureSize : signatureSize+8]))
+	db.version = DatabaseVersion(binary.LittleEndian.Uint64(header[signatureSize+8 : signatureSize+16]))
+	db.pagesCount = binary.LittleEndian.Uint64(header[signatureSize+16 : signatureSize+24])
+	db.nextTransactionID.Store(binary.LittleEndian.Uint64(header[signatureSize+24 : signatureSize+32]))
+	db.mu.Unlock()
+
+	return nil
+}
+
+func (db *Database) writeHeader() error {
+	header := make([]byte, HEADER_SIZE)
+	signatureSize := len(DB_STORAGE_SIGNATURE)
+
+	copy(header[0:signatureSize], []byte(DB_STORAGE_SIGNATURE))
+
+	db.mu.RLock()
+	binary.LittleEndian.PutUint64(header[signatureSize:signatureSize+8], uint64(db.root))
+	binary.LittleEndian.PutUint64(header[signatureSize+8:signatureSize+16], uint64(db.version))
+	binary.LittleEndian.PutUint64(header[signatureSize+16:signatureSize+24], uint64(db.nextTransactionID.Load()))
+	binary.LittleEndian.PutUint64(header[signatureSize+24:signatureSize+32], uint64(db.pagesCount))
+	db.mu.RUnlock()
+
+	return db.storage.UpdateMemorySegment(0, header)
+}
+
+func (db *Database) recoverFromWAL() error {
+	latestSavedVersion, err := db.wal.LatestVersion()
+	if err != nil {
+		return fmt.Errorf("Database: failed to get latest database version from WAL: %w", err)
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if latestSavedVersion == db.version {
+		return nil
+	}
+
+	return nil
+	//missedEvents := db.wal.ChangesSince(db.version)
 }

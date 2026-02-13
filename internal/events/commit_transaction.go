@@ -8,6 +8,10 @@ type CommitTransaction struct {
 	ID uint64
 }
 
+func NewCommitTransaction(txID uint64) *CommitTransaction {
+	return &CommitTransaction{ID: txID}
+}
+
 func (event *CommitTransaction) Name() string {
 	return COMMIT_TRANSACTION_EVENT
 }

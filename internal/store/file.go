@@ -85,7 +85,7 @@ func (storage *FileStorage) MemorySegment(offset int, size int) []byte {
 		panic(fmt.Sprintf("FileStorage: getting memory segment is out of range %d > %d", size+offset, storage.size))
 	}
 
-	return helpers.ReadSegments(storage.memory, offset, size)
+	return helpers.ReadFromSegments(storage.memory, offset, size)
 }
 
 func (storage *FileStorage) UpdateMemorySegment(offset int, data []byte) error {
@@ -98,7 +98,7 @@ func (storage *FileStorage) UpdateMemorySegment(offset int, data []byte) error {
 		return err
 	}
 
-	helpers.FillSegments(storage.memory, offset, data)
+	helpers.WriteToSegments(storage.memory, offset, data)
 
 	return nil
 }
@@ -113,7 +113,7 @@ func (storage *FileStorage) AppendMemorySegment(data []byte) error {
 		return fmt.Errorf("FileStorage: append file size %w", err)
 	}
 
-	helpers.FillSegments(storage.memory, storage.offset, data)
+	helpers.WriteToSegments(storage.memory, storage.offset, data)
 
 	storage.offset += len(data)
 

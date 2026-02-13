@@ -2,7 +2,7 @@ package helpers
 
 import "unsafe"
 
-func CopySlice[T comparable](src []T) []T {
+func Clone[T comparable](src []T) []T {
 
 	if len(src) == 0 {
 		return []T{}
@@ -16,7 +16,7 @@ func CopySlice[T comparable](src []T) []T {
 	return dst
 }
 
-func StringifySlice[T comparable](src []T, stringifier func(T) string, separator string) string {
+func JoinFunc[T comparable](src []T, stringifier func(T) string, separator string) string {
 	str := ""
 
 	for idx, elem := range src {
@@ -30,7 +30,19 @@ func StringifySlice[T comparable](src []T, stringifier func(T) string, separator
 	return str
 }
 
-func ReadSegments[T comparable](segments [][]T, offset int, size int) []T {
+func IsZero[T comparable](slice []T) bool {
+	var empty T
+
+	for _, elem := range slice {
+		if elem != empty {
+			return false
+		}
+	}
+
+	return true
+}
+
+func ReadFromSegments[T comparable](segments [][]T, offset int, size int) []T {
 	block := make([]T, size)
 	blockStart := 0
 
@@ -56,7 +68,7 @@ func ReadSegments[T comparable](segments [][]T, offset int, size int) []T {
 	return block
 }
 
-func FillSegments[T comparable](segments [][]T, offset int, data []T) {
+func WriteToSegments[T comparable](segments [][]T, offset int, data []T) {
 	for _, segment := range segments {
 		if offset >= 0 && offset < len(segment) {
 			blockEnd := min(len(data), len(segment)-offset)

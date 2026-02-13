@@ -9,6 +9,10 @@ type UpdateEntry struct {
 	OldValue  []byte
 }
 
+func NewUpdateEntry(tableName string, key []byte, oldValue []byte, newValue []byte) *UpdateEntry {
+	return &UpdateEntry{TableName: tableName, Key: key, OldValue: oldValue, NewValue: newValue}
+}
+
 func (event *UpdateEntry) Name() string {
 	return UPDATE_ENTRY_EVENT
 }

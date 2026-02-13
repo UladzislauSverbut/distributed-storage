@@ -111,11 +111,7 @@ func (table *Table) Delete(query *vals.Object) error {
 	if response, err := table.kv.Delete(&kv.DeleteRequest{Key: index}); err != nil {
 		return err
 	} else {
-		table.changeEvents = append(table.changeEvents, &events.DeleteEntry{
-			TableName: table.schema.Name,
-			Key:       index,
-			Value:     response.OldValue,
-		})
+		table.changeEvents = append(table.changeEvents, events.NewDeleteEntry(table.schema.Name, index, response.OldValue))
 	}
 
 	return nil
@@ -144,10 +140,7 @@ func (table *Table) Insert(record *vals.Object) error {
 		return err
 	}
 
-	table.changeEvents = append(table.changeEvents, &events.InsertEntry{
-		TableName: table.schema.Name,
-		Key:       index,
-		Value:     value})
+	table.changeEvents = append(table.changeEvents, events.NewInsertEntry(table.schema.Name, index, value))
 
 	return nil
 }
@@ -179,12 +172,7 @@ func (table *Table) Update(record *vals.Object) (*vals.Object, error) {
 		return nil, err
 	}
 
-	table.changeEvents = append(table.changeEvents, &events.UpdateEntry{
-		TableName: table.schema.Name,
-		Key:       index,
-		NewValue:  newValue,
-		OldValue:  response.Value,
-	})
+	table.changeEvents = append(table.changeEvents, events.NewUpdateEntry(table.schema.Name, index, response.Value, newValue))
 
 	return table.decodePayload(response.Value), nil
 }
@@ -213,22 +201,13 @@ func (table *Table) Upsert(record *vals.Object) (*vals.Object, error) {
 			return nil, err
 		}
 
-		table.changeEvents = append(table.changeEvents, &events.InsertEntry{
-			TableName: table.schema.Name,
-			Key:       index,
-			Value:     newValue,
-		})
+		table.changeEvents = append(table.changeEvents, events.NewInsertEntry(table.schema.Name, index, newValue))
 	} else {
 		if err := table.updateSecondaryIndexes(record, table.decodePayload(response.Value)); err != nil {
 			return nil, err
 		}
 
-		table.changeEvents = append(table.changeEvents, &events.UpdateEntry{
-			TableName: table.schema.Name,
-			Key:       index,
-			NewValue:  newValue,
-			OldValue:  response.Value,
-		})
+		table.changeEvents = append(table.changeEvents, events.NewUpdateEntry(table.schema.Name, index, response.Value, newValue))
 	}
 
 	return table.decodePayload(response.Value), nil

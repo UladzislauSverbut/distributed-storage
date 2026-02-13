@@ -88,12 +88,11 @@ func (manager *TableManager) UpdateTable(name string, table *Table) error {
 
 	manager.loadedTables[name] = table
 
-	manager.events = append(manager.events,
-		&events.UpdateTable{
-			TableName: table.Name(),
-			NewSchema: stringifiedSchema,
-			OldSchema: previousRecord.Get("definition").Serialize(),
-		})
+	manager.events = append(manager.events, events.NewUpdateTable(
+		table.Name(),
+		stringifiedSchema,
+		previousRecord.Get("definition").Serialize(),
+	))
 
 	return nil
 }
@@ -116,7 +115,7 @@ func (manager *TableManager) CreateTable(schema *TableSchema) (*Table, error) {
 	}
 
 	manager.loadedTables[schema.Name] = table
-	manager.events = append(manager.events, &events.CreateTable{TableName: table.Name(), Schema: stringifiedSchema})
+	manager.events = append(manager.events, events.NewCreateTable(table.Name(), stringifiedSchema))
 
 	return table, nil
 }
@@ -129,7 +128,7 @@ func (manager *TableManager) DeleteTable(name string) error {
 	}
 
 	delete(manager.loadedTables, name)
-	manager.events = append(manager.events, &events.DeleteTable{TableName: name})
+	manager.events = append(manager.events, events.NewDeleteTable(name))
 
 	return nil
 }
@@ -194,7 +193,7 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (err e
 	return nil
 }
 
-func (manager *TableManager) PersistTables() error {
+func (manager *TableManager) WriteTables() error {
 	for name, table := range manager.loadedTables {
 		if err := manager.UpdateTable(name, table); err != nil {
 			return fmt.Errorf("Catalog: couldn't save table %s: %w", name, err)

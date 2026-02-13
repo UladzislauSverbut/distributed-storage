@@ -8,6 +8,10 @@ type InsertEntry struct {
 	Value     []byte
 }
 
+func NewInsertEntry(tableName string, key []byte, value []byte) *InsertEntry {
+	return &InsertEntry{TableName: tableName, Key: key, Value: value}
+}
+
 func (event *InsertEntry) Name() string {
 	return INSERT_ENTRY_EVENT
 }

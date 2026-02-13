@@ -4,15 +4,14 @@ import (
 	"context"
 	"distributed-storage/internal/pager"
 	"fmt"
-	"sync/atomic"
 )
 
 type TransactionID uint64
 type TransactionState int
 
 type TransactionCommit struct {
+	ID              TransactionID
 	DatabaseVersion DatabaseVersion
-	TransactionID   TransactionID
 	ReadEvents      []TableEvent
 	ChangeEvents    []TableEvent
 	Response        chan<- TransactionCommitResponse
@@ -52,7 +51,7 @@ func NewTransaction(db *Database, ctx context.Context) (*Transaction, error) {
 	db.mu.RUnlock()
 
 	tx := &Transaction{
-		id:      TransactionID(atomic.AddUint64((*uint64)(&db.nextTransactionID), 1)),
+		id:      TransactionID(db.nextTransactionID.Add(1)),
 		version: version,
 
 		state:   PROCESSING,
@@ -79,13 +78,13 @@ func (tx *Transaction) Commit() (err error) {
 		tx.Rollback()
 	}()
 
-	if !tx.markCommitting() {
+	if !tx.setCommitting() {
 		return fmt.Errorf("Transaction: couldn't commit transaction with id %d because it is not active", tx.id)
 	}
 
 	// If there is nothing to write, then just return
 	if len(tx.manager.ChangeEvents()) == 0 {
-		tx.markCommitted()
+		tx.setCommitted()
 		return nil
 	}
 
@@ -93,28 +92,29 @@ func (tx *Transaction) Commit() (err error) {
 	responseChannel := make(chan TransactionCommitResponse, 1)
 
 	tx.commitQueue <- TransactionCommit{
-		TransactionID: tx.id,
-		ChangeEvents:  tx.manager.ChangeEvents(),
-		Response:      responseChannel,
+		ID:              tx.id,
+		DatabaseVersion: tx.version,
+		ChangeEvents:    tx.manager.ChangeEvents(),
+		Response:        responseChannel,
 	}
 
 	select {
 	case response := <-responseChannel:
 		if response.Success {
-			tx.markCommitted()
+			tx.setCommitted()
 			return nil
 		} else {
-			tx.markAborted()
+			tx.setAborted()
 			return response.Error
 		}
 	case <-tx.ctx.Done():
-		tx.markAborted()
+		tx.setAborted()
 		return fmt.Errorf("Transaction: commit transaction with id %d cancelled by context", tx.id)
 	}
 }
 
 func (tx *Transaction) Rollback() {
-	tx.markAborted()
+	tx.setAborted()
 }
 
 func (tx *Transaction) Table(tableName string) (*Table, error) {
@@ -148,7 +148,7 @@ func (tx *Transaction) IsActive() bool {
 	return tx.state == PROCESSING || tx.state == COMMITTING
 }
 
-func (tx *Transaction) markCommitting() bool {
+func (tx *Transaction) setCommitting() bool {
 	if tx.state != PROCESSING {
 		return false
 	}
@@ -157,7 +157,7 @@ func (tx *Transaction) markCommitting() bool {
 	return true
 }
 
-func (tx *Transaction) markCommitted() bool {
+func (tx *Transaction) setCommitted() bool {
 	if tx.state != COMMITTING {
 		return false
 	}
@@ -166,7 +166,7 @@ func (tx *Transaction) markCommitted() bool {
 	return true
 }
 
-func (tx *Transaction) markAborted() bool {
+func (tx *Transaction) setAborted() bool {
 	if tx.state != COMMITTING {
 		return false
 	}

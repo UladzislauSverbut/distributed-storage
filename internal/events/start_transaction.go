@@ -8,6 +8,10 @@ type StartTransaction struct {
 	ID uint64
 }
 
+func NewStartTransaction(txID uint64) *StartTransaction {
+	return &StartTransaction{ID: txID}
+}
+
 func (event *StartTransaction) Name() string {
 	return START_TRANSACTION_EVENT
 }

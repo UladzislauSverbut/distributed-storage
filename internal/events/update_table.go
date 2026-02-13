@@ -11,6 +11,10 @@ type UpdateTable struct {
 	OldSchema []byte // JSON-encoded TableSchema
 }
 
+func NewUpdateTable(tableName string, oldSchema []byte, newSchema []byte) *UpdateTable {
+	return &UpdateTable{TableName: tableName, OldSchema: oldSchema, NewSchema: newSchema}
+}
+
 func (event *UpdateTable) Name() string {
 	return UPDATE_TABLE_EVENT
 }

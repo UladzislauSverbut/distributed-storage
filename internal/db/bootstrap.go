@@ -1,12 +1,10 @@
 package db
 
 import (
-	"distributed-storage/internal/pager"
 	"distributed-storage/internal/store"
-	"encoding/binary"
 )
 
-func setupStorage(config *DatabaseConfig) (walStorage, dbStorage store.Storage, err error) {
+func setupStorage(config DatabaseConfig) (walStorage, dbStorage store.Storage, err error) {
 	initialSize := config.PageSize * 10
 
 	if walStorage, err = store.NewFileStorage(config.Directory+"/wal.log", initialSize); err != nil {
@@ -22,19 +20,17 @@ func setupStorage(config *DatabaseConfig) (walStorage, dbStorage store.Storage, 
 	return
 }
 
-func parseHeader(header []byte) (rootPage pager.PagePointer, nextTransactionID TransactionID, pagesCount uint64) {
-	rootPage = pager.PagePointer(binary.LittleEndian.Uint64(header[0:8]))
-	nextTransactionID = TransactionID(binary.LittleEndian.Uint64(header[8:16]))
-	pagesCount = binary.LittleEndian.Uint64(header[16:24])
+const DEFAULT_DIRECTORY = "/var/lib/kv"
+const DEFAULT_PAGE_SIZE = 16 * 1024 // 16KB
 
-	return
-}
+func applyDefaults(config DatabaseConfig) DatabaseConfig {
+	if config.Directory == "" {
+		config.Directory = DEFAULT_DIRECTORY
+	}
 
-func buildHeader(rootPage pager.PagePointer, nextTransactionID TransactionID, pagesCount uint64) []byte {
-	header := make([]byte, HEADER_SIZE)
+	if config.PageSize == 0 {
+		config.PageSize = DEFAULT_PAGE_SIZE
+	}
 
-	binary.LittleEndian.PutUint64(header[0:8], uint64(rootPage))
-	binary.LittleEndian.PutUint64(header[8:16], uint64(nextTransactionID))
-	binary.LittleEndian.PutUint64(header[16:24], uint64(pagesCount))
-	return header
+	return config
 }
