@@ -19,7 +19,6 @@ var catalogSchema = TableSchema{
 
 type TableManager struct {
 	catalog      *Table
-	events       []TableEvent
 	loadedTables map[string]*Table
 
 	allocator *pager.PageAllocator
@@ -30,7 +29,6 @@ func NewTableManager(root pager.PagePointer, allocator *pager.PageAllocator) *Ta
 
 	return &TableManager{
 		catalog:      catalog,
-		events:       make([]TableEvent, 0),
 		loadedTables: make(map[string]*Table),
 
 		allocator: allocator,
@@ -42,9 +40,7 @@ func (manager *TableManager) Table(name string) (*Table, error) {
 		return table, nil
 	}
 
-	query := vals.NewObject().Set("name", vals.NewString(name))
-
-	record, err := manager.catalog.Get(query)
+	record, err := manager.catalog.Get(manager.constructTableQuery(name))
 
 	if err != nil {
 		return nil, fmt.Errorf("Catalog: couldn't read table schema: %w", err)
@@ -54,44 +50,28 @@ func (manager *TableManager) Table(name string) (*Table, error) {
 		return nil, nil
 	}
 
-	definition := record.Get("definition").(*vals.StringValue).Value()
-	root := record.Get("root").(*vals.IntValue[uint64]).Value()
-	schema := &TableSchema{}
-
-	if err := json.Unmarshal([]byte(definition), schema); err != nil {
-		return nil, fmt.Errorf("Catalog: couldn't parse table schema: %w", err)
-	}
-
-	manager.loadedTables[name], err = NewTable(root, manager.allocator, schema)
-	if err != nil {
-		return nil, fmt.Errorf("Catalog: couldn't initialize table %s: %w", name, err)
-	}
+	manager.loadedTables[name] = manager.recordToTable(record)
 
 	return manager.loadedTables[name], nil
 }
 
 func (manager *TableManager) UpdateTable(name string, table *Table) error {
-	stringifiedSchema, _ := json.Marshal(table.schema)
+	record := manager.tableToRecord(table)
 
-	schemaRecord := vals.NewObject().
-		Set("name", vals.NewString(table.schema.Name)).
-		Set("definition", vals.NewString(string(stringifiedSchema))).
-		Set("root", vals.NewInt(table.Root()))
-
-	previousRecord, err := manager.catalog.Upsert(schemaRecord)
+	oldRecord, err := manager.catalog.Upsert(record)
 	if err != nil {
 		return fmt.Errorf("Catalog: couldn't save table %s: %w", name, err)
 	}
-	if previousRecord == nil {
+	if oldRecord == nil {
 		return fmt.Errorf("Catalog: couldn't update table %s because it doesn't exist in catalog", name)
 	}
 
 	manager.loadedTables[name] = table
 
-	manager.events = append(manager.events, events.NewUpdateTable(
+	table.changeEvents = append(table.changeEvents, events.NewUpdateTable(
 		table.Name(),
-		stringifiedSchema,
-		previousRecord.Get("definition").Serialize(),
+		record.Get("definition").Serialize(),
+		oldRecord.Get("definition").Serialize(),
 	))
 
 	return nil
@@ -103,38 +83,39 @@ func (manager *TableManager) CreateTable(schema *TableSchema) (*Table, error) {
 		return nil, fmt.Errorf("Catalog: couldn't create table %s: %w", schema.Name, err)
 	}
 
-	stringifiedSchema, _ := json.Marshal(table.schema)
+	record := manager.tableToRecord(table)
 
-	schemaRecord := vals.NewObject().
-		Set("name", vals.NewString(table.schema.Name)).
-		Set("definition", vals.NewString(string(stringifiedSchema))).
-		Set("root", vals.NewInt(table.Root()))
-
-	if err := manager.catalog.Insert(schemaRecord); err != nil {
+	if err := manager.catalog.Insert(record); err != nil {
 		return nil, fmt.Errorf("Catalog: couldn't create table %s: %w", schema.Name, err)
 	}
 
 	manager.loadedTables[schema.Name] = table
-	manager.events = append(manager.events, events.NewCreateTable(table.Name(), stringifiedSchema))
+
+	table.changeEvents = append(table.changeEvents, events.NewCreateTable(table.Name(), record.Get("definition").Serialize()))
 
 	return table, nil
 }
 
 func (manager *TableManager) DeleteTable(name string) error {
-	query := vals.NewObject().Set("name", vals.NewString(name))
 
-	if err := manager.catalog.Delete(query); err != nil {
+	oldRecord, err := manager.catalog.Delete(manager.constructTableQuery(name))
+	if err != nil {
 		return fmt.Errorf("Catalog: couldn't delete table %s from catalog: %w", name, err)
 	}
 
-	delete(manager.loadedTables, name)
-	manager.events = append(manager.events, events.NewDeleteTable(name))
+	if manager.loadedTables[name] == nil {
+		manager.loadedTables[name] = manager.recordToTable(oldRecord)
+	}
+
+	table := manager.loadedTables[name]
+
+	table.changeEvents = append(table.changeEvents, events.NewDeleteTable(name))
 
 	return nil
 }
 
 func (manager *TableManager) ChangeEvents() []TableEvent {
-	events := manager.events
+	events := make([]TableEvent, 0)
 
 	for _, table := range manager.loadedTables {
 		tableEvents := table.ChangeEvents()
@@ -306,4 +287,28 @@ func (manager *TableManager) applyInsertEntryEvent(event *events.InsertEntry) er
 	}
 
 	return nil
+}
+
+func (manager *TableManager) constructTableQuery(name string) *vals.Object {
+	return vals.NewObject().Set("name", vals.NewString(name))
+}
+
+func (manager *TableManager) recordToTable(record *vals.Object) *Table {
+	definition := record.Get("definition").(*vals.StringValue).Value()
+	root := record.Get("root").(*vals.IntValue[uint64]).Value()
+
+	schema := &TableSchema{}
+	json.Unmarshal([]byte(definition), schema)
+
+	table, _ := NewTable(root, manager.allocator, schema)
+	return table
+}
+
+func (manager *TableManager) tableToRecord(table *Table) *vals.Object {
+	stringifiedSchema, _ := json.Marshal(table.schema)
+
+	return vals.NewObject().
+		Set("name", vals.NewString(table.schema.Name)).
+		Set("definition", vals.NewString(string(stringifiedSchema))).
+		Set("root", vals.NewInt(table.Root()))
 }

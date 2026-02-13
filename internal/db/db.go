@@ -234,7 +234,7 @@ func (db *Database) readHeader() error {
 		db.root = pager.NULL_PAGE
 		db.version = 1
 		db.pagesCount = 1 // reserve page for header
-		db.nextTransactionID.Store(1)
+		db.nextTransactionID.Store(0)
 
 		return nil
 	}

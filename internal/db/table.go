@@ -101,20 +101,20 @@ func (table *Table) GetAll() []*vals.Object {
 	return records
 }
 
-func (table *Table) Delete(query *vals.Object) error {
+func (table *Table) Delete(query *vals.Object) (*vals.Object, error) {
 	index := table.getPrimaryIndex(query)
 
 	if index == nil {
-		return fmt.Errorf("Table: can't delete record because one of primary index columns is missing: %s", query)
+		return nil, fmt.Errorf("Table: can't delete record because one of primary index columns is missing: %s", query)
 	}
 
 	if response, err := table.kv.Delete(&kv.DeleteRequest{Key: index}); err != nil {
-		return err
+		return nil, err
 	} else {
 		table.changeEvents = append(table.changeEvents, events.NewDeleteEntry(table.schema.Name, index, response.OldValue))
-	}
 
-	return nil
+		return table.decodePayload(response.OldValue), nil
+	}
 }
 
 func (table *Table) Insert(record *vals.Object) error {
