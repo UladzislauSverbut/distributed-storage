@@ -4,12 +4,15 @@ import (
 	"distributed-storage/internal/events"
 	"distributed-storage/internal/pager"
 	"distributed-storage/internal/store"
+	"encoding/binary"
+	"hash/crc32"
+
 	"fmt"
 )
 
 type WAL struct {
-	pendinLog []byte
-	storage   store.Storage
+	pendingLog []byte
+	storage    store.Storage
 }
 
 func NewWAL(storage store.Storage) *WAL {
@@ -24,18 +27,18 @@ func (wal *WAL) WriteTransactions(transactions []TransactionCommit) {
 	}
 
 	for _, transaction := range transactions {
-		wal.pendinLog = append(wal.pendinLog, events.NewStartTransaction(uint64(transaction.ID)).Serialize()...)
+		wal.addLogRow(events.NewStartTransaction(uint64(transaction.ID)).Serialize())
 
 		for _, event := range transaction.ChangeEvents {
-			wal.pendinLog = append(wal.pendinLog, event.Serialize()...)
+			wal.addLogRow(event.Serialize())
 		}
 
-		wal.pendinLog = append(wal.pendinLog, events.NewCommitTransaction(uint64(transaction.ID)).Serialize()...)
+		wal.addLogRow(events.NewCommitTransaction(uint64(transaction.ID)).Serialize())
 	}
 }
 
 func (wal *WAL) WriteVersion(version DatabaseVersion) {
-	wal.pendinLog = append(wal.pendinLog, events.NewUpdateDBVersion(uint64(version)).Serialize()...)
+	wal.addLogRow(events.NewUpdateDBVersion(uint64(version)).Serialize())
 }
 
 func (wal *WAL) WriteFreePages(version DatabaseVersion, pages []pager.PagePointer) {
@@ -43,7 +46,7 @@ func (wal *WAL) WriteFreePages(version DatabaseVersion, pages []pager.PagePointe
 		return
 	}
 
-	wal.pendinLog = append(wal.pendinLog, events.NewFreePages(uint64(version), pages).Serialize()...)
+	wal.addLogRow(events.NewFreePages(uint64(version), pages).Serialize())
 }
 
 func (wal *WAL) LatestVersion() (DatabaseVersion, error) {
@@ -55,11 +58,25 @@ func (wal *WAL) ChangesSince(version DatabaseVersion) ([]TableEvent, error) {
 }
 
 func (wal *WAL) Flush() error {
-	defer func() { wal.pendinLog = nil }()
+	defer func() { wal.pendingLog = nil }()
 
-	if err := wal.storage.AppendMemorySegment(wal.pendinLog); err != nil {
+	if err := wal.storage.AppendMemorySegment(wal.pendingLog); err != nil {
 		return fmt.Errorf("WAL: failed to write WAL segment %w", err)
 	}
 
 	return wal.storage.Flush()
+}
+
+func (wal *WAL) Truncate(version DatabaseVersion) error {
+	return nil // TODO: Implement this method to truncate the WAL up to the given version
+}
+
+func (wal *WAL) addLogRow(log []byte) {
+	size := len(log)
+	hash := make([]byte, 4)
+	binary.BigEndian.PutUint32(hash, crc32.ChecksumIEEE(log))
+
+	wal.pendingLog = append(wal.pendingLog, byte(size))
+	wal.pendingLog = append(wal.pendingLog, hash...)
+	wal.pendingLog = append(wal.pendingLog, log...)
 }

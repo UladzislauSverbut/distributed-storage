@@ -58,12 +58,9 @@ func (manager *TableManager) Table(name string) (*Table, error) {
 func (manager *TableManager) UpdateTable(name string, table *Table) error {
 	record := manager.tableToRecord(table)
 
-	oldRecord, err := manager.catalog.Upsert(record)
+	oldRecord, err := manager.catalog.Update(record)
 	if err != nil {
 		return fmt.Errorf("Catalog: couldn't save table %s: %w", name, err)
-	}
-	if oldRecord == nil {
-		return fmt.Errorf("Catalog: couldn't update table %s because it doesn't exist in catalog", name)
 	}
 
 	manager.loadedTables[name] = table
@@ -177,12 +174,12 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (err e
 func (manager *TableManager) WriteTables() error {
 	for name, table := range manager.loadedTables {
 		if err := manager.UpdateTable(name, table); err != nil {
-			return fmt.Errorf("Catalog: couldn't save table %s: %w", name, err)
+			return fmt.Errorf("Catalog: couldn't update table %s: %w", name, err)
 		}
 	}
 
 	if err := manager.allocator.Save(); err != nil {
-		return fmt.Errorf("Catalog: couldn't save page manager state: %w", err)
+		return fmt.Errorf("Catalog: couldn't save state: %w", err)
 	}
 
 	return nil

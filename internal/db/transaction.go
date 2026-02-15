@@ -41,21 +41,17 @@ const (
 
 func NewTransaction(db *Database, ctx context.Context) (*Transaction, error) {
 	db.mu.RLock()
-	root := db.root
-	version := db.version
-
-	pagesCount := db.pagesCount
-	pageSize := db.config.PageSize
-
-	storage := db.storage
+	root := db.header.root
+	version := db.header.version
+	pagesCount := db.header.pagesCount
 	db.mu.RUnlock()
 
 	tx := &Transaction{
-		id:      TransactionID(db.nextTransactionID.Add(1)),
+		id:      db.nextTransactionID(),
 		version: version,
 
 		state:   PROCESSING,
-		manager: NewTableManager(root, pager.NewPageAllocator(storage, pagesCount, pageSize)),
+		manager: NewTableManager(root, pager.NewPageAllocator(db.storage, pagesCount, db.config.PageSize)),
 
 		commitQueue: db.commitQueue,
 		ctx:         ctx,
