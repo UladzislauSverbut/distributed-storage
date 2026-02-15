@@ -21,7 +21,7 @@ const (
 	TYPE_UINT64
 )
 
-func Init(valueType ValueType) Value {
+func New(valueType ValueType) Value {
 	switch valueType {
 	case TYPE_STRING:
 		return &StringValue{}

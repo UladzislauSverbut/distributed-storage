@@ -357,7 +357,7 @@ func (table *Table) decodePayload(encodedPayload []byte) *vals.Object {
 		if encodedPayload[0] == 0 {
 			record.Set(columnName, vals.NewNull())
 		} else {
-			columnValue := vals.Init(table.schema.ColumnTypes[columnName])
+			columnValue := vals.New(table.schema.ColumnTypes[columnName])
 			columnValue.Parse(encodedPayload[1:])
 
 			encodedPayload = encodedPayload[columnValue.Size()+1:]
@@ -416,7 +416,7 @@ func (table *Table) decodeSecondaryIndex(encodedIndex []byte) (primaryIndexVals 
 	encodedIndex = encodedIndex[INDEX_ID_SIZE:]
 
 	for _, columnName := range table.schema.SecondaryIndexes[secondaryIndexNumber] {
-		columnValue := vals.Init(table.schema.ColumnTypes[columnName])
+		columnValue := vals.New(table.schema.ColumnTypes[columnName])
 		columnValue.Parse(encodedIndex)
 		secondaryIndexVals = append(secondaryIndexVals, columnValue)
 
@@ -424,7 +424,7 @@ func (table *Table) decodeSecondaryIndex(encodedIndex []byte) (primaryIndexVals 
 	}
 
 	for _, columnName := range table.schema.PrimaryIndex {
-		columnValue := vals.Init(table.schema.ColumnTypes[columnName])
+		columnValue := vals.New(table.schema.ColumnTypes[columnName])
 		columnValue.Parse(encodedIndex)
 		primaryIndexVals = append(primaryIndexVals, columnValue)
 

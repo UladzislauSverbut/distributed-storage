@@ -67,8 +67,8 @@ func (manager *TableManager) UpdateTable(name string, table *Table) error {
 
 	table.changeEvents = append(table.changeEvents, events.NewUpdateTable(
 		table.Name(),
-		record.Get("definition").Serialize(),
-		oldRecord.Get("definition").Serialize(),
+		[]byte(oldRecord.GetString("definition")),
+		[]byte(record.GetString("definition")),
 	))
 
 	return nil
@@ -88,7 +88,10 @@ func (manager *TableManager) CreateTable(schema *TableSchema) (*Table, error) {
 
 	manager.loadedTables[schema.Name] = table
 
-	table.changeEvents = append(table.changeEvents, events.NewCreateTable(table.Name(), record.Get("definition").Serialize()))
+	table.changeEvents = append(table.changeEvents, events.NewCreateTable(
+		table.Name(),
+		[]byte(record.GetString("definition")),
+	))
 
 	return table, nil
 }
@@ -291,8 +294,8 @@ func (manager *TableManager) constructTableQuery(name string) *vals.Object {
 }
 
 func (manager *TableManager) recordToTable(record *vals.Object) *Table {
-	definition := record.Get("definition").(*vals.StringValue).Value()
-	root := record.Get("root").(*vals.IntValue[uint64]).Value()
+	definition := record.GetString("definition")
+	root := record.GetUint64("root")
 
 	schema := &TableSchema{}
 	json.Unmarshal([]byte(definition), schema)
