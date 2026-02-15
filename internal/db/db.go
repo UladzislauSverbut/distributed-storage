@@ -30,7 +30,7 @@ type DatabaseHeader struct {
 	root          pager.PagePointer
 	version       DatabaseVersion
 	pagesCount    uint64
-	transactionID atomic.Uint64 // it's reference to TransactionID but with atomic operations support
+	transactionID *atomic.Uint64 // it's reference to TransactionID but with atomic operations support
 }
 
 type Database struct {
@@ -71,10 +71,8 @@ func NewDatabase(config DatabaseConfig) (*Database, error) {
 		commitQueue:  make(chan TransactionCommit, NUMBER_OF_PARALLEL_TRANSACTIONS),
 	}
 
-	if header, err := db.readHeader(); err != nil {
+	if db.header, err = db.readHeader(); err != nil {
 		return nil, err
-	} else {
-		db.header = header
 	}
 
 	if err := db.recoverFromWAL(); err != nil {
@@ -143,7 +141,6 @@ func (db *Database) runSyncLoop() {
 }
 
 func (db *Database) sync() {
-
 	db.mu.RLock()
 	header := db.header
 	db.mu.RUnlock()
@@ -204,11 +201,16 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	db.releasePages(latestUnreachableVersion, reusablePages)
 	db.releasePages(db.header.version+1, releasedPages)
 
+	newHeader := &DatabaseHeader{
+		root:          manager.Root(),
+		version:       db.header.version + 1,
+		pagesCount:    allocator.TotalPages(),
+		transactionID: db.header.transactionID,
+	}
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	db.header.root = manager.Root()
-	db.header.version = db.header.version + 1
-	db.header.pagesCount = allocator.TotalPages()
+	db.header = newHeader
 }
 
 func (db *Database) rejectTransactions(transactions []TransactionCommit, err error) {
@@ -277,9 +279,10 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 
 	if helpers.IsZero(signature) {
 		return &DatabaseHeader{
-			root:       pager.NULL_PAGE,
-			version:    1,
-			pagesCount: 1, // reserve page for header
+			root:          pager.NULL_PAGE,
+			version:       1,
+			pagesCount:    1, // reserve page for header
+			transactionID: &atomic.Uint64{},
 		}, nil
 	}
 
@@ -290,10 +293,12 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 	signatureSize := len(DB_STORAGE_SIGNATURE)
 
 	header := &DatabaseHeader{
-		root:       pager.PagePointer(binary.LittleEndian.Uint64(headerBlock[signatureSize : signatureSize+8])),
-		version:    DatabaseVersion(binary.LittleEndian.Uint64(headerBlock[signatureSize+8 : signatureSize+16])),
-		pagesCount: binary.LittleEndian.Uint64(headerBlock[signatureSize+16 : signatureSize+24]),
+		root:          pager.PagePointer(binary.LittleEndian.Uint64(headerBlock[signatureSize : signatureSize+8])),
+		version:       DatabaseVersion(binary.LittleEndian.Uint64(headerBlock[signatureSize+8 : signatureSize+16])),
+		pagesCount:    binary.LittleEndian.Uint64(headerBlock[signatureSize+16 : signatureSize+24]),
+		transactionID: &atomic.Uint64{},
 	}
+
 	header.transactionID.Store(binary.LittleEndian.Uint64(headerBlock[signatureSize+24 : signatureSize+32]))
 
 	return header, nil
