@@ -1,14 +1,19 @@
 package events
 
-import "encoding/json"
+import (
+	"distributed-storage/internal/helpers"
+	"errors"
+)
 
 const UPDATE_TABLE_EVENT = "UPDATE_TABLE"
 
-// UpdateTable describes update of a table. Schema is stored as JSON.
+var updateTableParsingError = errors.New("UpdateTable: couldn't parse event")
+
+// UpdateTable describes update of a table. Schemas are stored as raw bytes.
 type UpdateTable struct {
 	TableName string
-	NewSchema []byte // JSON-encoded TableSchema
-	OldSchema []byte // JSON-encoded TableSchema
+	NewSchema []byte
+	OldSchema []byte
 }
 
 func NewUpdateTable(tableName string, oldSchema []byte, newSchema []byte) *UpdateTable {
@@ -20,13 +25,24 @@ func (event *UpdateTable) Name() string {
 }
 
 func (event *UpdateTable) Serialize() []byte {
-	oldSchema, _ := json.Marshal(string(event.OldSchema))
-	newSchema, _ := json.Marshal(string(event.NewSchema))
+	serializedEvent := []byte(event.Name())
 
-	return []byte(event.Name() + "(TABLE=" + event.TableName + ",OLD_SCHEMA=" + string(oldSchema) + ",NEW_SCHEMA=" + string(newSchema) + ")\n")
+	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, []byte(event.TableName)...)
+	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, event.OldSchema...)
+	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, event.NewSchema...)
+
+	return serializedEvent
 }
 
-func (event *UpdateTable) Parse(data []byte) error {
-	// Will be implemented in the future when we will need to parse events from WAL
-	return nil
+func ParseUpdateTable(data []byte) (*UpdateTable, error) {
+	parts := helpers.SplitBy(data, ' ')
+
+	if len(parts) != 4 || string(parts[0]) != UPDATE_TABLE_EVENT {
+		return nil, updateTableParsingError
+	}
+
+	return NewUpdateTable(string(parts[1]), parts[2], parts[3]), nil
 }

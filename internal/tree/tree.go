@@ -348,8 +348,8 @@ func (tree *Tree) mergeNodes(first *Node, second *Node) *Node {
 
 func (tree *Tree) getLessOrEqualKeyPosition(node *Node, key []byte) NodeKeyPosition {
 	storedKeysNumber := node.getStoredKeysNumber()
-	// we find the position of last key that is less or equal than passed key
-	// by default sequence number is 0 because we visited this node from the parent that contains the same key
+	// We find the position of last key that is less or equal than passed key.
+	// By default sequence number is 0 because we visited this node from the parent that contains the same key
 	// thus first stored key is always less or equal to passed
 	position := NodeKeyPosition(0)
 

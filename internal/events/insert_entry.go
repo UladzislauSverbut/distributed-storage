@@ -1,6 +1,13 @@
 package events
 
+import (
+	"distributed-storage/internal/helpers"
+	"errors"
+)
+
 const INSERT_ENTRY_EVENT = "INSERT_ENTRY"
+
+var insertEntryParsingError = errors.New("InsertEntry: couldn't parse event")
 
 type InsertEntry struct {
 	TableName string
@@ -17,10 +24,25 @@ func (event *InsertEntry) Name() string {
 }
 
 func (event *InsertEntry) Serialize() []byte {
-	return []byte(event.Name() + "(TABLE=" + event.TableName + ",KEY=" + string(event.Key) + ",VALUE=" + string(event.Value) + ")\n")
+	serializedEvent := []byte(event.Name())
+
+	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, []byte(event.TableName)...)
+	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, event.Key...)
+	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, event.Value...)
+	serializedEvent = append(serializedEvent)
+
+	return serializedEvent
 }
 
-func (e *InsertEntry) Parse(data []byte) error {
-	// Will be implemented in the future when we need to parse events from WAL.
-	return nil
+func ParseInsertEntry(data []byte) (*InsertEntry, error) {
+	parts := helpers.SplitBy(data, ' ')
+
+	if len(parts) != 4 || string(parts[0]) != INSERT_ENTRY_EVENT {
+		return nil, insertEntryParsingError
+	}
+
+	return NewInsertEntry(string(parts[1]), parts[2], parts[3]), nil
 }

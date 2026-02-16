@@ -16,7 +16,7 @@ import (
 const DB_STORAGE_SIGNATURE = "DISTRIBUTED_DB_STORAGE" // Signature to identify and validate database storage file
 const HEADER_SIZE = len(DB_STORAGE_SIGNATURE) + 32
 
-// bytes
+// Bytes
 const NUMBER_OF_PARALLEL_TRANSACTIONS = 1024 // Max number of parallel transactions
 const COMMIT_BATCH_SIZE = 256                // Number of transactions to commit in a single batch
 
@@ -281,7 +281,7 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 		return &DatabaseHeader{
 			root:          pager.NULL_PAGE,
 			version:       1,
-			pagesCount:    1, // reserve page for header
+			pagesCount:    1, // Reserve page for header
 			transactionID: &atomic.Uint64{},
 		}, nil
 	}

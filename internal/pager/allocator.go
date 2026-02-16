@@ -14,11 +14,11 @@ type PageAllocatorConfig struct {
 }
 
 type PageAllocatorState struct {
-	TotalPages    uint64                   // total number of pages in storage
-	PagePool      helpers.Set[PagePointer] // total set of pages that are not reachable by others and could be reused
-	ReusablePages helpers.Set[PagePointer] // set of pages that are prepared for reuse
-	ReleasedPages helpers.Set[PagePointer] // set of pages that were released and cannot be overwritten due to immutability
-	pageUpdates   map[PagePointer][]byte   // map of page updates that will be synced with storage
+	TotalPages    uint64                   // Total number of pages in storage
+	PagePool      helpers.Set[PagePointer] // Total set of pages that are not reachable by others and could be reused
+	ReusablePages helpers.Set[PagePointer] // Set of pages that are prepared for reuse
+	ReleasedPages helpers.Set[PagePointer] // Set of pages that were released and cannot be overwritten due to immutability
+	pageUpdates   map[PagePointer][]byte   // Map of page updates that will be synced with storage
 }
 
 type PageAllocator struct {

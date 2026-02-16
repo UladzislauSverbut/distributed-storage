@@ -1,8 +1,14 @@
 package events
 
-import "strconv"
+import (
+	"distributed-storage/internal/helpers"
+	"encoding/binary"
+	"errors"
+)
 
 const START_TRANSACTION_EVENT = "START_TRANSACTION"
+
+var startTransactionParsingError = errors.New("StartTransaction: couldn't parse event")
 
 type StartTransaction struct {
 	ID uint64
@@ -17,10 +23,25 @@ func (event *StartTransaction) Name() string {
 }
 
 func (event *StartTransaction) Serialize() []byte {
-	return []byte(event.Name() + "(TX=" + strconv.FormatUint(uint64(event.ID), 10) + ")\n")
+	serializedEvent := []byte(event.Name())
+	transactionID := make([]byte, 8)
+
+	binary.LittleEndian.PutUint64(transactionID, event.ID)
+
+	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, transactionID...)
+
+	return serializedEvent
 }
 
-func (event *StartTransaction) Parse(data []byte) error {
-	// Will be implemented in the future when we need to parse events from WAL.
-	return nil
+func ParseStartTransaction(data []byte) (*StartTransaction, error) {
+	parts := helpers.SplitBy(data, ' ')
+
+	if len(parts) != 2 || string(parts[0]) != START_TRANSACTION_EVENT {
+		return nil, startTransactionParsingError
+	}
+
+	return &StartTransaction{
+		ID: binary.LittleEndian.Uint64(parts[1]),
+	}, nil
 }

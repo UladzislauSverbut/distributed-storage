@@ -1,8 +1,13 @@
 package events
 
-import "encoding/json"
+import (
+	"distributed-storage/internal/helpers"
+	"errors"
+)
 
 const CREATE_TABLE_EVENT = "CREATE_TABLE"
+
+var createTableParsingError = errors.New("CreateTable: couldn't parse event")
 
 // CreateTable describes creation of a table. Schema is stored as JSON.
 type CreateTable struct {
@@ -19,12 +24,22 @@ func (event *CreateTable) Name() string {
 }
 
 func (event *CreateTable) Serialize() []byte {
-	schema, _ := json.Marshal(string(event.Schema))
-	return []byte(event.Name() + "(TABLE=" + event.TableName + ",SCHEMA=" + string(schema) + ")\n")
+	serializedEvent := []byte(event.Name())
 
+	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, []byte(event.TableName)...)
+	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, event.Schema...)
+
+	return serializedEvent
 }
 
-func (e *CreateTable) Parse(data []byte) error {
-	// Will be implemented in the future when we will need to parse events from WAL
-	return nil
+func ParseCreateTable(data []byte) (*CreateTable, error) {
+	parts := helpers.SplitBy(data, ' ')
+
+	if len(parts) != 3 || string(parts[0]) != CREATE_TABLE_EVENT {
+		return nil, createTableParsingError
+	}
+
+	return NewCreateTable(string(parts[1]), parts[2]), nil
 }

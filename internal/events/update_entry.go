@@ -1,6 +1,13 @@
 package events
 
+import (
+	"distributed-storage/internal/helpers"
+	"errors"
+)
+
 const UPDATE_ENTRY_EVENT = "UPDATE_ENTRY"
+
+var updateEntryParsingError = errors.New("UpdateEntry: couldn't parse event")
 
 type UpdateEntry struct {
 	TableName string
@@ -18,10 +25,26 @@ func (event *UpdateEntry) Name() string {
 }
 
 func (event *UpdateEntry) Serialize() []byte {
-	return []byte(event.Name() + "(TABLE=" + event.TableName + ",KEY=" + string(event.Key) + ",OLD_VALUE=" + string(event.OldValue) + ",NEW_VALUE=" + string(event.NewValue) + ")\n")
+	serializedEvent := []byte(event.Name())
+
+	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, []byte(event.TableName)...)
+	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, event.Key...)
+	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, event.OldValue...)
+	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, event.NewValue...)
+
+	return serializedEvent
 }
 
-func (event *UpdateEntry) Parse(data []byte) error {
-	// Will be implemented in the future when we need to parse events from WAL.
-	return nil
+func ParseUpdateEntry(data []byte) (*UpdateEntry, error) {
+	parts := helpers.SplitBy(data, ' ')
+
+	if len(parts) != 5 || string(parts[0]) != UPDATE_ENTRY_EVENT {
+		return nil, updateEntryParsingError
+	}
+
+	return NewUpdateEntry(string(parts[1]), parts[2], parts[3], parts[4]), nil
 }

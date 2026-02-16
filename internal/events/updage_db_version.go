@@ -1,10 +1,14 @@
 package events
 
 import (
-	"strconv"
+	"distributed-storage/internal/helpers"
+	"encoding/binary"
+	"errors"
 )
 
 const UPDATE_DB_VERSION = "UPDATE_DB_VERSION"
+
+var updateDBVersionParsingError = errors.New("UpdateDBVersion: couldn't parse event")
 
 type UpdateDBVersion struct {
 	Version uint64
@@ -19,10 +23,24 @@ func (event *UpdateDBVersion) Name() string {
 }
 
 func (event *UpdateDBVersion) Serialize() []byte {
-	return []byte(event.Name() + "(DB_V=" + strconv.FormatUint(event.Version, 10) + ")\n")
+	serializedEvent := []byte(event.Name())
+	version := make([]byte, 8)
+
+	binary.LittleEndian.PutUint64(version, event.Version)
+
+	serializedEvent = append(serializedEvent, ' ')
+
+	return serializedEvent
 }
 
-func (event *UpdateDBVersion) Parse(data []byte) error {
-	// Will be implemented in the future when we need to parse events from WAL.
-	return nil
+func ParseUpdateDBVersion(data []byte) (*UpdateDBVersion, error) {
+	parts := helpers.SplitBy(data, ' ')
+
+	if len(parts) != 2 || string(parts[0]) != UPDATE_DB_VERSION {
+		return nil, updateDBVersionParsingError
+	}
+
+	return &UpdateDBVersion{
+		Version: binary.LittleEndian.Uint64(parts[1]),
+	}, nil
 }

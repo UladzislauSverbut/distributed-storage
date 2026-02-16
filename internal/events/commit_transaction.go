@@ -1,8 +1,14 @@
 package events
 
-import "strconv"
+import (
+	"distributed-storage/internal/helpers"
+	"encoding/binary"
+	"errors"
+)
 
 const COMMIT_TRANSACTION_EVENT = "COMMIT_TRANSACTION"
+
+var commitTransactionParsingError = errors.New("CommitTransaction: couldn't parse event")
 
 type CommitTransaction struct {
 	ID uint64
@@ -17,10 +23,25 @@ func (event *CommitTransaction) Name() string {
 }
 
 func (event *CommitTransaction) Serialize() []byte {
-	return []byte(event.Name() + "(TX=" + strconv.FormatUint(event.ID, 10) + ")\n")
+	serializedEvent := []byte(event.Name())
+	transactionID := make([]byte, 8)
+
+	binary.LittleEndian.PutUint64(transactionID, event.ID)
+
+	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, transactionID...)
+
+	return serializedEvent
 }
 
-func (event *CommitTransaction) Parse(data []byte) error {
-	// Will be implemented in the future when we need to parse events from WAL.
-	return nil
+func ParseCommitTransaction(data []byte) (*CommitTransaction, error) {
+	parts := helpers.SplitBy(data, ' ')
+
+	if len(parts) != 2 || string(parts[0]) != COMMIT_TRANSACTION_EVENT {
+		return nil, commitTransactionParsingError
+	}
+
+	return &CommitTransaction{
+		ID: binary.LittleEndian.Uint64(parts[1]),
+	}, nil
 }

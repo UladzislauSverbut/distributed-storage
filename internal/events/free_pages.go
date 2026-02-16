@@ -3,10 +3,13 @@ package events
 import (
 	"distributed-storage/internal/helpers"
 	"distributed-storage/internal/pager"
-	"strconv"
+	"encoding/binary"
+	"errors"
 )
 
 const FREE_PAGES_EVENT = "FREE_PAGES"
+
+var freePagesParsingError = errors.New("FreePages: couldn't parse event")
 
 type FreePages struct {
 	Version uint64
@@ -22,10 +25,44 @@ func (event *FreePages) Name() string {
 }
 
 func (event *FreePages) Serialize() []byte {
-	return []byte(event.Name() + "(DB_V=" + strconv.FormatUint(event.Version, 10) + ",PAGES=" + helpers.JoinFunc(event.Pages, func(page uint64) string { return strconv.FormatUint(page, 10) }, ",") + ")\n")
+	serializedEvent := []byte(event.Name())
+	version := make([]byte, 8)
+	pages := make([]byte, len(event.Pages)*8)
+
+	for idx, page := range event.Pages {
+		binary.LittleEndian.PutUint64(pages[idx*8:], page)
+	}
+
+	binary.LittleEndian.PutUint64(version, event.Version)
+
+	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, version...)
+	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, pages...)
+
+	return serializedEvent
 }
 
-func (event *FreePages) Parse(data []byte) error {
-	// Will be implemented in the future when we need to parse events from WAL.
-	return nil
+func ParseFreePages(data []byte) (*FreePages, error) {
+	parts := helpers.SplitBy(data, ' ')
+
+	if len(parts) != 2 || string(parts[0]) != FREE_PAGES_EVENT {
+		return nil, freePagesParsingError
+	}
+
+	serializedVersion := parts[0]
+	serializedPages := parts[1]
+
+	version := binary.LittleEndian.Uint64(serializedVersion)
+	pages := make([]pager.PagePointer, (len(serializedPages) / 8))
+
+	for idx := 0; idx < len(serializedPages)/8; idx++ {
+		pages[idx] = binary.LittleEndian.Uint64(serializedPages[idx*8:])
+	}
+
+	return &FreePages{
+		Version: version,
+		Pages:   pages,
+	}, nil
+
 }

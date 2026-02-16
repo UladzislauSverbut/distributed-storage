@@ -87,3 +87,20 @@ func WriteToSegments[T comparable](segments [][]T, offset int, data []T) {
 		}
 	}
 }
+
+func SplitBy(data []byte, separator byte) [][]byte {
+	parts := make([][]byte, 0)
+	currentPart := make([]byte, 0)
+
+	for _, symbol := range data {
+		if symbol == separator {
+			parts = append(parts, currentPart)
+			currentPart = make([]byte, 0)
+			continue
+		}
+
+		currentPart = append(currentPart, symbol)
+	}
+
+	return append(parts, currentPart)
+}

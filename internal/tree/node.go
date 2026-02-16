@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const HEADER_SIZE = 4 // size of node header in file bytes
+const HEADER_SIZE = 4 // Size of node header in file bytes
 
 const NULL_NODE = NodePointer(0)
 
@@ -124,7 +124,7 @@ func (node *Node) appendPointer(key []byte, pointer NodePointer) {
 }
 
 func (node *Node) size() uint16 {
-	// we store offset of the end of last key-value pair as size of node
+	// We store offset of the end of last key-value pair as size of node
 
 	offset := node.getKeyValueOffset(node.getStoredKeysNumber())
 
