@@ -175,13 +175,18 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 		}
 	}
 
+	if err := manager.WriteTables(); err != nil {
+		db.rejectTransactions(transactions, fmt.Errorf("Database: failed to write tables to to storage: %w", err))
+		return
+	}
+
 	releasedPages := allocator.ReleasedPages()
 	reusablePages := allocator.ReusablePages()
 
 	db.wal.WriteTransactions(approvedTransactions)
 
 	db.wal.WriteFreePages(latestUnreachableVersion, reusablePages) // These pages can be reused because they are not used by any active transaction (e.g. they were allocated and released in the same version)
-	db.wal.WriteFreePages(db.header.version+1, releasedPages)      // These pages will be ready to safely reused only since next db version since they can be still used by active transactions in the current version
+	db.wal.WriteFreePages(db.header.version, releasedPages)        // These pages will be ready to safely reused only since next db version since they can be still used by active transactions in the current version
 
 	db.wal.WriteVersion(db.header.version + 1)
 
@@ -190,16 +195,11 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 		return
 	}
 
-	if err := manager.WriteTables(); err != nil {
-		db.rejectTransactions(transactions, fmt.Errorf("Database: failed to write tables to to storage: %w", err))
-		return
-	}
-
 	db.approveTransactions(approvedTransactions)
 	db.rejectTransactions(abortedTransactions, errors.New("Database: transaction aborted due to conflicts with other transactions"))
 
 	db.releasePages(latestUnreachableVersion, reusablePages)
-	db.releasePages(db.header.version+1, releasedPages)
+	db.releasePages(db.header.version, releasedPages)
 
 	newHeader := &DatabaseHeader{
 		root:          manager.Root(),

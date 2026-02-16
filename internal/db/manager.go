@@ -60,7 +60,7 @@ func (manager *TableManager) UpdateTable(name string, table *Table) error {
 
 	oldRecord, err := manager.catalog.Update(record)
 	if err != nil {
-		return fmt.Errorf("Catalog: couldn't save table %s: %w", name, err)
+		return fmt.Errorf("Catalog: couldn't update table %s: %w", name, err)
 	}
 
 	manager.loadedTables[name] = table
@@ -177,7 +177,7 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (err e
 func (manager *TableManager) WriteTables() error {
 	for name, table := range manager.loadedTables {
 		if err := manager.UpdateTable(name, table); err != nil {
-			return fmt.Errorf("Catalog: couldn't update table %s: %w", name, err)
+			return fmt.Errorf("Catalog: couldn't write table %s: %w", name, err)
 		}
 	}
 
