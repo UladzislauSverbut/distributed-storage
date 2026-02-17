@@ -69,7 +69,6 @@ func (wal *WAL) Flush() error {
 }
 
 func (wal *WAL) Truncate(version DatabaseVersion) error {
-
 	return nil // TODO: Implement this method to truncate the WAL up to the given version
 }
 

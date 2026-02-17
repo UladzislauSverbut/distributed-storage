@@ -314,7 +314,7 @@ func (db *Database) writeHeader(header *DatabaseHeader) error {
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize+16:signatureSize+24], header.pagesCount)
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize+24:signatureSize+32], uint64(header.transactionID.Load()))
 
-	return db.storage.UpdateMemorySegment(0, headerBlock)
+	return db.storage.UpdateMemorySegments([]store.MemorySegmentUpdate{{Offset: 0, Data: headerBlock}})
 }
 
 func (db *Database) recoverFromWAL() error {

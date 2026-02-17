@@ -93,10 +93,18 @@ func (allocator *PageAllocator) TotalPages() uint64 {
 }
 
 func (allocator *PageAllocator) Save() error {
+	updates := make([]store.MemorySegmentUpdate, 0, len(allocator.state.pageUpdates))
+
 	for pointer, page := range allocator.state.pageUpdates {
-		if err := allocator.storage.UpdateMemorySegment(int(pointer)*allocator.config.pageSize, page[0:allocator.config.pageSize]); err != nil {
-			return err
-		}
+		updates = append(updates,
+			store.MemorySegmentUpdate{
+				Offset: int(pointer) * allocator.config.pageSize,
+				Data:   page[0:allocator.config.pageSize]},
+		)
+	}
+
+	if err := allocator.storage.UpdateMemorySegments(updates); err != nil {
+		return err
 	}
 
 	// Clear all page updates after saving because they are already applied to storage

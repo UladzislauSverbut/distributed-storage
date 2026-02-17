@@ -50,13 +50,16 @@ func (storage *MemoryStorage) MemorySegment(offset int, size int) []byte {
 	return helpers.ReadFromSegments(storage.memory, offset, size)
 }
 
-func (storage *MemoryStorage) UpdateMemorySegment(offset int, data []byte) error {
+func (storage *MemoryStorage) UpdateMemorySegments(updates []MemorySegmentUpdate) error {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
-	storage.ensureSize(offset + len(data))
+	for _, update := range updates {
+		storage.ensureSize(update.Offset + len(update.Data))
 
-	helpers.WriteToSegments(storage.memory, offset, data)
+		helpers.WriteToSegments(storage.memory, update.Offset, update.Data)
+	}
+
 	return nil
 }
 

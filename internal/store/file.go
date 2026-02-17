@@ -88,17 +88,19 @@ func (storage *FileStorage) MemorySegment(offset int, size int) []byte {
 	return helpers.ReadFromSegments(storage.memory, offset, size)
 }
 
-func (storage *FileStorage) UpdateMemorySegment(offset int, data []byte) error {
+func (storage *FileStorage) UpdateMemorySegments(updates []MemorySegmentUpdate) error {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
-	expectedSize := offset + len(data)
+	for _, update := range updates {
+		expectedSize := update.Offset + len(update.Data)
 
-	if err := storage.ensureSize(expectedSize); err != nil {
-		return err
+		if err := storage.ensureSize(expectedSize); err != nil {
+			return err
+		}
+
+		helpers.WriteToSegments(storage.memory, update.Offset, update.Data)
 	}
-
-	helpers.WriteToSegments(storage.memory, offset, data)
 
 	return nil
 }
