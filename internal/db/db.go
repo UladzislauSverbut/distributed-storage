@@ -145,12 +145,8 @@ func (db *Database) sync() {
 	header := db.header
 	db.mu.RUnlock()
 
-	if err := db.writeHeader(header); err != nil {
-		fmt.Printf("Database: failed to write header to storage: %v\n", err)
-	}
-
-	if err := db.storage.Flush(); err != nil {
-		fmt.Printf("Database: failed to flush storage: %v\n", err)
+	if err := db.flushHeader(header); err != nil {
+		fmt.Printf("Database: failed to flush header to storage: %v\n", err)
 	}
 
 	if err := db.wal.Truncate(header.version); err != nil {
@@ -274,7 +270,7 @@ func (db *Database) nextTransactionID() TransactionID {
 }
 
 func (db *Database) readHeader() (*DatabaseHeader, error) {
-	headerBlock := db.storage.MemorySegment(0, HEADER_SIZE)
+	headerBlock := db.storage.Segment(0, HEADER_SIZE)
 	signature := headerBlock[0:len(DB_STORAGE_SIGNATURE)]
 
 	if helpers.IsZero(signature) {
@@ -304,7 +300,7 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 	return header, nil
 }
 
-func (db *Database) writeHeader(header *DatabaseHeader) error {
+func (db *Database) flushHeader(header *DatabaseHeader) error {
 	headerBlock := make([]byte, HEADER_SIZE)
 	signatureSize := len(DB_STORAGE_SIGNATURE)
 
@@ -314,7 +310,7 @@ func (db *Database) writeHeader(header *DatabaseHeader) error {
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize+16:signatureSize+24], header.pagesCount)
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize+24:signatureSize+32], uint64(header.transactionID.Load()))
 
-	return db.storage.UpdateMemorySegments([]store.MemorySegmentUpdate{{Offset: 0, Data: headerBlock}})
+	return db.storage.UpdateSegmentsAndFlush([]store.SegmentUpdate{{Offset: 0, Data: headerBlock}})
 }
 
 func (db *Database) recoverFromWAL() error {

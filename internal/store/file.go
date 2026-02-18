@@ -28,13 +28,12 @@ func NewFileStorage(filePath string, initialSize int) (*FileStorage, error) {
 	}()
 
 	if file, err = os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0644); err != nil {
-		return nil, fmt.Errorf("FileStorage: failed to open file %w", err)
+		return nil, fmt.Errorf("FileStorage: couldn't open file during initialization: %w", err)
 	}
 
 	fileStat, err := file.Stat()
-
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("FileStorage: couldn't stat file during initialization: %w", err)
 	}
 
 	fileSize := int(fileStat.Size())
@@ -48,36 +47,59 @@ func NewFileStorage(filePath string, initialSize int) (*FileStorage, error) {
 
 	if storage.size > 0 {
 		chunk, err := mapFileToMemory(file, 0, fileSize)
-
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("FileStorage: couldn't map file to memory during initialization: %w", err)
 		}
 
 		storage.memory = append(storage.memory, chunk)
 	}
 
 	if err := storage.ensureSize(initialSize); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("FileStorage: failed to ensure initial size: %w", err)
 	}
 
 	return storage, nil
 }
 
-func (storage *FileStorage) Flush() error {
+func (storage *FileStorage) UpdateSegmentsAndFlush(updates []SegmentUpdate) error {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
-	return storage.file.Sync()
+	for _, update := range updates {
+		expectedSize := update.Offset + len(update.Data)
+
+		if err := storage.ensureSize(expectedSize); err != nil {
+			return fmt.Errorf("FileStorage: couldn't increase size to update segment: %w", err)
+		}
+
+		helpers.WriteToSegments(storage.memory, update.Offset, update.Data)
+	}
+
+	if err := storage.file.Sync(); err != nil {
+		return fmt.Errorf("FileStorage: couldn't sync file during flushing updated segments: %w", err)
+	}
+	return nil
 }
 
-func (storage *FileStorage) Size() int {
-	storage.mu.RLock()
-	defer storage.mu.RUnlock()
+func (storage *FileStorage) AppendSegmentAndFlush(data []byte) error {
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
 
-	return storage.size
+	expectedSize := storage.offset + len(data)
+	if err := storage.ensureSize(expectedSize); err != nil {
+		return fmt.Errorf("FileStorage: couldn't increase size to append segment: %w", err)
+	}
+
+	helpers.WriteToSegments(storage.memory, storage.offset, data)
+	storage.offset += len(data)
+
+	if err := storage.file.Sync(); err != nil {
+		return fmt.Errorf("FileStorage: couldn't sync file during appending segment: %w", err)
+	}
+	return nil
 }
 
-func (storage *FileStorage) MemorySegment(offset int, size int) []byte {
+func (storage *FileStorage) Segment(offset int, size int) []byte {
 	storage.mu.RLock()
 	defer storage.mu.RUnlock()
 
@@ -88,7 +110,7 @@ func (storage *FileStorage) MemorySegment(offset int, size int) []byte {
 	return helpers.ReadFromSegments(storage.memory, offset, size)
 }
 
-func (storage *FileStorage) UpdateMemorySegments(updates []MemorySegmentUpdate) error {
+func (storage *FileStorage) UpdateSegments(updates []SegmentUpdate) error {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
@@ -96,7 +118,7 @@ func (storage *FileStorage) UpdateMemorySegments(updates []MemorySegmentUpdate) 
 		expectedSize := update.Offset + len(update.Data)
 
 		if err := storage.ensureSize(expectedSize); err != nil {
-			return err
+			return fmt.Errorf("FileStorage: couldn't increase size to update segment: %w", err)
 		}
 
 		helpers.WriteToSegments(storage.memory, update.Offset, update.Data)
@@ -105,14 +127,14 @@ func (storage *FileStorage) UpdateMemorySegments(updates []MemorySegmentUpdate) 
 	return nil
 }
 
-func (storage *FileStorage) AppendMemorySegment(data []byte) error {
+func (storage *FileStorage) AppendSegment(data []byte) error {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
 	expectedSize := storage.offset + len(data)
 
 	if err := storage.ensureSize(expectedSize); err != nil {
-		return fmt.Errorf("FileStorage: append file size %w", err)
+		return fmt.Errorf("FileStorage: couldn't increase size to append segment: %w", err)
 	}
 
 	helpers.WriteToSegments(storage.memory, storage.offset, data)
@@ -120,6 +142,23 @@ func (storage *FileStorage) AppendMemorySegment(data []byte) error {
 	storage.offset += len(data)
 
 	return nil
+}
+
+func (storage *FileStorage) Flush() error {
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
+
+	if err := storage.file.Sync(); err != nil {
+		return fmt.Errorf("FileStorage: couldn't flush accumulated changes: %w", err)
+	}
+	return nil
+}
+
+func (storage *FileStorage) Size() int {
+	storage.mu.RLock()
+	defer storage.mu.RUnlock()
+
+	return storage.size
 }
 
 func (storage *FileStorage) ensureSize(desiredSize int) error {
@@ -133,12 +172,12 @@ func (storage *FileStorage) ensureSize(desiredSize int) error {
 	totalSize := int(math.Max(float64(desiredSize), float64(storage.size)*1.25))
 
 	if totalSize, err = increaseFileSize(storage.file, totalSize); err != nil {
-		return fmt.Errorf("FileStorage: failed to increase file size %w", err)
+		return fmt.Errorf("FileStorage: couldn't increase file size: %w", err)
 	}
 
 	newMemoryBlock, err := mapFileToMemory(storage.file, int64(oldSize), totalSize-oldSize)
 	if err != nil {
-		return fmt.Errorf("FileStorage: failed to map file to memory %w", err)
+		return fmt.Errorf("FileStorage: couldn't map file to memory: %w", err)
 	}
 
 	storage.memory = append(storage.memory, newMemoryBlock)

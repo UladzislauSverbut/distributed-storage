@@ -50,7 +50,7 @@ func (allocator *PageAllocator) Page(pointer PagePointer) []byte {
 		return page
 	}
 
-	return allocator.storage.MemorySegment(int(pointer)*allocator.config.pageSize, allocator.config.pageSize)
+	return allocator.storage.Segment(int(pointer)*allocator.config.pageSize, allocator.config.pageSize)
 }
 
 func (allocator *PageAllocator) CreatePage(data []byte) PagePointer {
@@ -93,17 +93,17 @@ func (allocator *PageAllocator) TotalPages() uint64 {
 }
 
 func (allocator *PageAllocator) Save() error {
-	updates := make([]store.MemorySegmentUpdate, 0, len(allocator.state.pageUpdates))
+	updates := make([]store.SegmentUpdate, 0, len(allocator.state.pageUpdates))
 
 	for pointer, page := range allocator.state.pageUpdates {
 		updates = append(updates,
-			store.MemorySegmentUpdate{
+			store.SegmentUpdate{
 				Offset: int(pointer) * allocator.config.pageSize,
 				Data:   page[0:allocator.config.pageSize]},
 		)
 	}
 
-	if err := allocator.storage.UpdateMemorySegments(updates); err != nil {
+	if err := allocator.storage.UpdateSegments(updates); err != nil {
 		return err
 	}
 

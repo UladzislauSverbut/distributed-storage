@@ -27,18 +27,7 @@ func NewMemoryStorage(initialSize int) *MemoryStorage {
 	return storage
 }
 
-func (storage *MemoryStorage) Flush() error {
-	return nil
-}
-
-func (storage *MemoryStorage) Size() int {
-	storage.mu.RLock()
-	defer storage.mu.RUnlock()
-
-	return storage.size
-}
-
-func (storage *MemoryStorage) MemorySegment(offset int, size int) []byte {
+func (storage *MemoryStorage) Segment(offset int, size int) []byte {
 
 	storage.mu.RLock()
 	defer storage.mu.RUnlock()
@@ -50,7 +39,7 @@ func (storage *MemoryStorage) MemorySegment(offset int, size int) []byte {
 	return helpers.ReadFromSegments(storage.memory, offset, size)
 }
 
-func (storage *MemoryStorage) UpdateMemorySegments(updates []MemorySegmentUpdate) error {
+func (storage *MemoryStorage) UpdateSegments(updates []SegmentUpdate) error {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
@@ -63,17 +52,40 @@ func (storage *MemoryStorage) UpdateMemorySegments(updates []MemorySegmentUpdate
 	return nil
 }
 
-func (storage *MemoryStorage) AppendMemorySegment(data []byte) error {
+func (storage *MemoryStorage) UpdateSegmentsAndFlush(updates []SegmentUpdate) error {
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
+
+	for _, update := range updates {
+		storage.ensureSize(update.Offset + len(update.Data))
+
+		helpers.WriteToSegments(storage.memory, update.Offset, update.Data)
+	}
+
+	return storage.Flush()
+}
+
+func (storage *MemoryStorage) AppendSegmentAndFlush(data []byte) error {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
 	storage.ensureSize(storage.offset + len(data))
 
 	helpers.WriteToSegments(storage.memory, storage.offset, data)
-
 	storage.offset += len(data)
 
+	return storage.Flush()
+}
+
+func (storage *MemoryStorage) Flush() error {
 	return nil
+}
+
+func (storage *MemoryStorage) Size() int {
+	storage.mu.RLock()
+	defer storage.mu.RUnlock()
+
+	return storage.size
 }
 
 func (storage *MemoryStorage) ensureSize(desiredSize int) {

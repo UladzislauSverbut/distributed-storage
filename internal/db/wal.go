@@ -61,11 +61,11 @@ func (wal *WAL) ChangesSince(version DatabaseVersion) ([]TableEvent, error) {
 func (wal *WAL) Flush() error {
 	defer func() { wal.pendingLog = nil }()
 
-	if err := wal.storage.AppendMemorySegment(wal.pendingLog); err != nil {
+	if err := wal.storage.AppendSegmentAndFlush(wal.pendingLog); err != nil {
 		return fmt.Errorf("WAL: failed to write WAL segment %w", err)
 	}
 
-	return wal.storage.Flush()
+	return nil
 }
 
 func (wal *WAL) Truncate(version DatabaseVersion) error {
