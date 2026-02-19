@@ -2,23 +2,110 @@ package db
 
 import (
 	"distributed-storage/internal/events"
+	"distributed-storage/internal/helpers"
 	"distributed-storage/internal/pager"
-	"distributed-storage/internal/store"
 	"encoding/binary"
 	"hash/crc32"
+	"io"
+	"os"
+	"sync"
 
 	"fmt"
 )
 
+const ARCHIVE_SUB_DIRECTORY = "archive"
+const SEGMENT_NAME_FORMAT = "segment_%010d.wal"
+
+type SegmentID uint64
+
 type WAL struct {
+	segment          *os.File
+	segmentID        SegmentID
+	segmentSize      int
+	segmentOffset    int64
+	segmentDirectory string
+
 	pendingLog []byte
-	storage    store.Storage
+
+	mu sync.Mutex
 }
 
-func NewWAL(storage store.Storage) *WAL {
-	return &WAL{
-		storage: storage,
+func NewWAL(directory string, segmentSize int) (*WAL, error) {
+	if err := os.Mkdir(directory, 0755); err != nil && !os.IsExist(err) {
+		return nil, fmt.Errorf("WAL: failed to create segment directory: %w", err)
 	}
+
+	if err := os.Mkdir(directory+"/"+ARCHIVE_SUB_DIRECTORY+"/", 0755); err != nil && !os.IsExist(err) {
+		return nil, fmt.Errorf("WAL: failed to create archive subdirectory: %w", err)
+	}
+
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return nil, fmt.Errorf("WAL: failed to read segment directory: %w", err)
+	}
+
+	var segmentID SegmentID = 0
+
+	for _, entry := range entries {
+		if parsed, _ := fmt.Sscanf(entry.Name(), "segment_%d.wal", &segmentID); parsed == 1 {
+			break
+		}
+	}
+
+	if segmentID != 0 {
+		wal := &WAL{
+			segmentID:        segmentID,
+			segmentSize:      segmentSize,
+			segmentDirectory: directory,
+			pendingLog:       []byte{},
+		}
+
+		if wal.segment, err = os.OpenFile(fmt.Sprintf("%s/"+SEGMENT_NAME_FORMAT, directory, segmentID), os.O_RDWR, 0644); err != nil {
+			return nil, fmt.Errorf("WAL: failed to open existing segment file: %w", err)
+		}
+
+		if wal.segmentOffset, err = wal.segment.Seek(0, io.SeekEnd); err != nil {
+			return nil, fmt.Errorf("WAL: failed to seek to end of segment: %w", err)
+		}
+
+		return wal, nil
+	}
+
+	archivedEntries, err := os.ReadDir(directory + "/" + ARCHIVE_SUB_DIRECTORY)
+	if err != nil {
+		return nil, fmt.Errorf("WAL: failed to read archive subdirectory: %w", err)
+	}
+
+	if len(archivedEntries) > 0 {
+		lastEntryIndex := len(archivedEntries) - 1 // Get the last entry in the archive directory because they are sorted by name, and the name contains the segment ID in increasing order
+
+		for entryIndex := lastEntryIndex; entryIndex >= 0; entryIndex-- {
+			if parsed, _ := fmt.Sscanf(archivedEntries[entryIndex].Name(), "segment_%d.wal", &segmentID); parsed == 1 {
+				break
+			}
+		}
+	}
+
+	segmentID++ // Start with the next segment ID after the last one found in the archive directory
+
+	segment, err := os.OpenFile(fmt.Sprintf("%s/"+SEGMENT_NAME_FORMAT, directory, segmentID), os.O_RDWR|os.O_CREATE, 0644)
+
+	if err != nil {
+		return nil, fmt.Errorf("WAL: failed to create new segment file: %w", err)
+	}
+
+	if _, err := helpers.IncreaseFileSize(segment, segmentSize); err != nil {
+		return nil, fmt.Errorf("WAL: failed to increase segment file size: %w", err)
+	}
+
+	return &WAL{
+		segment:          segment,
+		segmentID:        segmentID,
+		segmentSize:      segmentSize,
+		segmentOffset:    0,
+		segmentDirectory: directory,
+		pendingLog:       []byte{},
+	}, nil
 }
 
 func (wal *WAL) WriteTransactions(transactions []TransactionCommit) {
@@ -61,9 +148,15 @@ func (wal *WAL) ChangesSince(version DatabaseVersion) ([]TableEvent, error) {
 func (wal *WAL) Flush() error {
 	defer func() { wal.pendingLog = nil }()
 
-	if err := wal.storage.AppendSegmentAndFlush(wal.pendingLog); err != nil {
+	if _, err := wal.segment.WriteAt(wal.pendingLog, wal.segmentOffset); err != nil {
 		return fmt.Errorf("WAL: failed to write WAL segment %w", err)
 	}
+
+	if err := wal.segment.Sync(); err != nil {
+		return fmt.Errorf("WAL: failed to sync WAL segment %w", err)
+	}
+
+	wal.segmentOffset += int64(len(wal.pendingLog))
 
 	return nil
 }

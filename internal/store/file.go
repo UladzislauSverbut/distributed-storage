@@ -46,7 +46,7 @@ func NewFileStorage(filePath string, initialSize int) (*FileStorage, error) {
 	}
 
 	if storage.size > 0 {
-		chunk, err := mapFileToMemory(file, 0, fileSize)
+		chunk, err := helpers.MapFileToMemory(file, 0, fileSize)
 		if err != nil {
 			return nil, fmt.Errorf("FileStorage: couldn't map file to memory during initialization: %w", err)
 		}
@@ -171,11 +171,11 @@ func (storage *FileStorage) ensureSize(desiredSize int) error {
 	oldSize := storage.size
 	totalSize := int(math.Max(float64(desiredSize), float64(storage.size)*1.25))
 
-	if totalSize, err = increaseFileSize(storage.file, totalSize); err != nil {
+	if totalSize, err = helpers.IncreaseFileSize(storage.file, totalSize); err != nil {
 		return fmt.Errorf("FileStorage: couldn't increase file size: %w", err)
 	}
 
-	newMemoryBlock, err := mapFileToMemory(storage.file, int64(oldSize), totalSize-oldSize)
+	newMemoryBlock, err := helpers.MapFileToMemory(storage.file, int64(oldSize), totalSize-oldSize)
 	if err != nil {
 		return fmt.Errorf("FileStorage: couldn't map file to memory: %w", err)
 	}

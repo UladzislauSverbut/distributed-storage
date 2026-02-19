@@ -92,7 +92,7 @@ func (allocator *PageAllocator) TotalPages() uint64 {
 	return allocator.state.TotalPages
 }
 
-func (allocator *PageAllocator) Save() error {
+func (allocator *PageAllocator) Changes() []store.SegmentUpdate {
 	updates := make([]store.SegmentUpdate, 0, len(allocator.state.pageUpdates))
 
 	for pointer, page := range allocator.state.pageUpdates {
@@ -103,12 +103,5 @@ func (allocator *PageAllocator) Save() error {
 		)
 	}
 
-	if err := allocator.storage.UpdateSegments(updates); err != nil {
-		return err
-	}
-
-	// Clear all page updates after saving because they are already applied to storage
-	allocator.state.pageUpdates = map[PagePointer][]byte{}
-
-	return nil
+	return updates
 }

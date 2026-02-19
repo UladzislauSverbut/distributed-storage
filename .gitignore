@@ -2,3 +2,4 @@ wal.log
 data.db
 main.go
 .DS_Store
+db/

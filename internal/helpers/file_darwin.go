@@ -1,4 +1,4 @@
-package store
+package helpers
 
 import (
 	"os"
@@ -8,7 +8,7 @@ import (
 
 var page_size = unix.Getpagesize()
 
-func increaseFileSize(file *os.File, allocatedFileSize int) (int, error) {
+func IncreaseFileSize(file *os.File, allocatedFileSize int) (int, error) {
 	alignedFileSize := int64((allocatedFileSize + page_size - 1) & ^(page_size - 1))
 
 	if err := unix.FcntlFstore(file.Fd(), unix.F_ALLOCATECONTIG, &unix.Fstore_t{
@@ -26,6 +26,6 @@ func increaseFileSize(file *os.File, allocatedFileSize int) (int, error) {
 	return int(alignedFileSize), nil
 }
 
-func mapFileToMemory(file *os.File, offset int64, size int) (data []byte, err error) {
+func MapFileToMemory(file *os.File, offset int64, size int) (data []byte, err error) {
 	return unix.Mmap(int(file.Fd()), offset, size, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
 }

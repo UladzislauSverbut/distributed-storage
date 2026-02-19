@@ -181,10 +181,6 @@ func (manager *TableManager) WriteTables() error {
 		}
 	}
 
-	if err := manager.allocator.Save(); err != nil {
-		return fmt.Errorf("Catalog: couldn't save state: %w", err)
-	}
-
 	return nil
 }
 

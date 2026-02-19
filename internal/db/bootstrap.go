@@ -4,12 +4,8 @@ import (
 	"distributed-storage/internal/store"
 )
 
-func setupStorage(config DatabaseConfig) (walStorage, dbStorage store.Storage, err error) {
+func setupStorage(config DatabaseConfig) (dbStorage store.Storage, err error) {
 	initialSize := config.PageSize * 10
-
-	if walStorage, err = store.NewFileStorage(config.Directory+"/wal.log", initialSize); err != nil {
-		return
-	}
 
 	if config.InMemory {
 		dbStorage = store.NewMemoryStorage(initialSize)
@@ -21,7 +17,8 @@ func setupStorage(config DatabaseConfig) (walStorage, dbStorage store.Storage, e
 }
 
 const DEFAULT_DIRECTORY = "/var/lib/kv"
-const DEFAULT_PAGE_SIZE = 16 * 1024 // 16KB
+const DEFAULT_PAGE_SIZE = 16 * 1024               // 16KB
+const DEFAULT_WAL_SEGMENT_SIZE = 10 * 1024 * 1024 // 10MB
 
 func applyDefaults(config DatabaseConfig) DatabaseConfig {
 	if config.Directory == "" {
@@ -30,6 +27,10 @@ func applyDefaults(config DatabaseConfig) DatabaseConfig {
 
 	if config.PageSize == 0 {
 		config.PageSize = DEFAULT_PAGE_SIZE
+	}
+
+	if config.WALSegmentSize == 0 {
+		config.WALSegmentSize = DEFAULT_WAL_SEGMENT_SIZE
 	}
 
 	return config

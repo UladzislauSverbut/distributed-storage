@@ -48,21 +48,27 @@ type Database struct {
 }
 
 type DatabaseConfig struct {
-	Directory string
-	InMemory  bool
-	PageSize  int
+	Directory      string
+	InMemory       bool
+	PageSize       int
+	WALSegmentSize int
 }
 
 func NewDatabase(config DatabaseConfig) (*Database, error) {
 	config = applyDefaults(config)
-	walStorage, dbStorage, err := setupStorage(config)
 
+	dbStorage, err := setupStorage(config)
+	if err != nil {
+		return nil, err
+	}
+
+	wal, err := NewWAL(config.Directory, config.WALSegmentSize)
 	if err != nil {
 		return nil, err
 	}
 
 	db := &Database{
-		wal:     NewWAL(walStorage),
+		wal:     wal,
 		config:  config,
 		storage: dbStorage,
 
@@ -135,22 +141,12 @@ func (db *Database) runSyncLoop() {
 
 	for range ticker.C {
 		ticker.Stop()
-		db.sync()
+
+		if err := db.storage.Flush(); err != nil {
+			fmt.Printf("Database: failed to flush storage: %s\n", err)
+		}
+
 		ticker.Reset(SYNC_INTERVAL)
-	}
-}
-
-func (db *Database) sync() {
-	db.mu.RLock()
-	header := db.header
-	db.mu.RUnlock()
-
-	if err := db.flushHeader(header); err != nil {
-		fmt.Printf("Database: failed to flush header to storage: %v\n", err)
-	}
-
-	if err := db.wal.Truncate(header.version); err != nil {
-		fmt.Printf("Database: failed to truncate WAL: %v\n", err)
 	}
 }
 
@@ -179,6 +175,20 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	releasedPages := allocator.ReleasedPages()
 	reusablePages := allocator.ReusablePages()
 
+	newHeader := &DatabaseHeader{
+		root:          manager.Root(),
+		version:       db.header.version + 1,
+		pagesCount:    allocator.TotalPages(),
+		transactionID: db.header.transactionID,
+	}
+
+	changes := append(allocator.Changes(), store.SegmentUpdate{Offset: 0, Data: db.serializeHeader(newHeader)})
+
+	if err := db.storage.UpdateSegments(changes); err != nil {
+		db.rejectTransactions(transactions, fmt.Errorf("Database: failed to update storage segments: %w", err))
+		return
+	}
+
 	db.wal.WriteTransactions(approvedTransactions)
 
 	db.wal.WriteFreePages(latestUnreachableVersion, reusablePages) // These pages can be reused because they are not used by any active transaction (e.g. they were allocated and released in the same version)
@@ -196,13 +206,6 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 
 	db.releasePages(latestUnreachableVersion, reusablePages)
 	db.releasePages(db.header.version, releasedPages)
-
-	newHeader := &DatabaseHeader{
-		root:          manager.Root(),
-		version:       db.header.version + 1,
-		pagesCount:    allocator.TotalPages(),
-		transactionID: db.header.transactionID,
-	}
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -300,7 +303,7 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 	return header, nil
 }
 
-func (db *Database) flushHeader(header *DatabaseHeader) error {
+func (db *Database) serializeHeader(header *DatabaseHeader) []byte {
 	headerBlock := make([]byte, HEADER_SIZE)
 	signatureSize := len(DB_STORAGE_SIGNATURE)
 
@@ -310,7 +313,7 @@ func (db *Database) flushHeader(header *DatabaseHeader) error {
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize+16:signatureSize+24], header.pagesCount)
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize+24:signatureSize+32], uint64(header.transactionID.Load()))
 
-	return db.storage.UpdateSegmentsAndFlush([]store.SegmentUpdate{{Offset: 0, Data: headerBlock}})
+	return headerBlock
 }
 
 func (db *Database) recoverFromWAL() error {
