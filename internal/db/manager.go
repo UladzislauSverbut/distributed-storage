@@ -40,7 +40,7 @@ func (manager *TableManager) Table(name string) (*Table, error) {
 		return table, nil
 	}
 
-	record, err := manager.catalog.Get(manager.constructTableQuery(name))
+	record, err := manager.catalog.Get(manager.tableQuery(name))
 
 	if err != nil {
 		return nil, fmt.Errorf("Catalog: couldn't read table schema: %w", err)
@@ -50,13 +50,13 @@ func (manager *TableManager) Table(name string) (*Table, error) {
 		return nil, nil
 	}
 
-	manager.loadedTables[name] = manager.recordToTable(record)
+	manager.loadedTables[name] = manager.decodeTable(record)
 
 	return manager.loadedTables[name], nil
 }
 
 func (manager *TableManager) UpdateTable(name string, table *Table) error {
-	record := manager.tableToRecord(table)
+	record := manager.encodeTable(table)
 
 	oldRecord, err := manager.catalog.Update(record)
 	if err != nil {
@@ -80,7 +80,7 @@ func (manager *TableManager) CreateTable(schema *TableSchema) (*Table, error) {
 		return nil, fmt.Errorf("Catalog: couldn't create table %s: %w", schema.Name, err)
 	}
 
-	record := manager.tableToRecord(table)
+	record := manager.encodeTable(table)
 
 	if err := manager.catalog.Insert(record); err != nil {
 		return nil, fmt.Errorf("Catalog: couldn't create table %s: %w", schema.Name, err)
@@ -98,13 +98,13 @@ func (manager *TableManager) CreateTable(schema *TableSchema) (*Table, error) {
 
 func (manager *TableManager) DeleteTable(name string) error {
 
-	oldRecord, err := manager.catalog.Delete(manager.constructTableQuery(name))
+	oldRecord, err := manager.catalog.Delete(manager.tableQuery(name))
 	if err != nil {
 		return fmt.Errorf("Catalog: couldn't delete table %s from catalog: %w", name, err)
 	}
 
 	if manager.loadedTables[name] == nil {
-		manager.loadedTables[name] = manager.recordToTable(oldRecord)
+		manager.loadedTables[name] = manager.decodeTable(oldRecord)
 	}
 
 	table := manager.loadedTables[name]
@@ -285,11 +285,11 @@ func (manager *TableManager) applyInsertEntryEvent(event *events.InsertEntry) er
 	return nil
 }
 
-func (manager *TableManager) constructTableQuery(name string) *vals.Object {
+func (manager *TableManager) tableQuery(name string) *vals.Object {
 	return vals.NewObject().Set("name", vals.NewString(name))
 }
 
-func (manager *TableManager) recordToTable(record *vals.Object) *Table {
+func (manager *TableManager) decodeTable(record *vals.Object) *Table {
 	definition := record.GetString("definition")
 	root := record.GetUint64("root")
 
@@ -300,7 +300,7 @@ func (manager *TableManager) recordToTable(record *vals.Object) *Table {
 	return table
 }
 
-func (manager *TableManager) tableToRecord(table *Table) *vals.Object {
+func (manager *TableManager) encodeTable(table *Table) *vals.Object {
 	stringifiedSchema, _ := json.Marshal(table.schema)
 
 	return vals.NewObject().

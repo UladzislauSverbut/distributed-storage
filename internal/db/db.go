@@ -48,10 +48,12 @@ type Database struct {
 }
 
 type DatabaseConfig struct {
-	Directory      string
-	InMemory       bool
-	PageSize       int
-	WALSegmentSize int
+	Directory           string
+	InMemory            bool
+	PageSize            int
+	WALSegmentSize      int
+	WALDirectory        string
+	WALArchiveDirectory string
 }
 
 func NewDatabase(config DatabaseConfig) (*Database, error) {
@@ -62,7 +64,7 @@ func NewDatabase(config DatabaseConfig) (*Database, error) {
 		return nil, err
 	}
 
-	wal, err := NewWAL(config.Directory, config.WALSegmentSize)
+	wal, err := NewWAL(config.WALDirectory, config.WALArchiveDirectory, config.WALSegmentSize)
 	if err != nil {
 		return nil, err
 	}
@@ -189,14 +191,12 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 		return
 	}
 
-	db.wal.WriteTransactions(approvedTransactions)
+	db.wal.AppendTransactions(approvedTransactions)
+	db.wal.AppendFreePages(latestUnreachableVersion, reusablePages) // These pages can be reused because they are not used by any active transaction (e.g. they were allocated and released in the same version)
+	db.wal.AppendFreePages(db.header.version, releasedPages)        // These pages will be ready to safely reused only since next db version since they can be still used by active transactions in the current version
+	db.wal.AppendVersionUpdate(db.header.version + 1)
 
-	db.wal.WriteFreePages(latestUnreachableVersion, reusablePages) // These pages can be reused because they are not used by any active transaction (e.g. they were allocated and released in the same version)
-	db.wal.WriteFreePages(db.header.version, releasedPages)        // These pages will be ready to safely reused only since next db version since they can be still used by active transactions in the current version
-
-	db.wal.WriteVersion(db.header.version + 1)
-
-	if err := db.wal.Flush(); err != nil {
+	if err := db.wal.Sync(); err != nil {
 		db.rejectTransactions(transactions, fmt.Errorf("Database: WAL flush failed: %w", err))
 		return
 	}
@@ -317,7 +317,7 @@ func (db *Database) serializeHeader(header *DatabaseHeader) []byte {
 }
 
 func (db *Database) recoverFromWAL() error {
-	latestSavedVersion, err := db.wal.LatestVersion()
+	latestSavedVersion, err := db.wal.LatestUpdatedVersion()
 	if err != nil {
 		return fmt.Errorf("Database: failed to get latest database version from WAL: %w", err)
 	}

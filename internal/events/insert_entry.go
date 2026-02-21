@@ -32,7 +32,6 @@ func (event *InsertEntry) Serialize() []byte {
 	serializedEvent = append(serializedEvent, event.Key...)
 	serializedEvent = append(serializedEvent, ' ')
 	serializedEvent = append(serializedEvent, event.Value...)
-	serializedEvent = append(serializedEvent)
 
 	return serializedEvent
 }
