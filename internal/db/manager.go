@@ -24,8 +24,8 @@ type TableManager struct {
 	allocator *pager.PageAllocator
 }
 
-func NewTableManager(root pager.PagePointer, allocator *pager.PageAllocator) *TableManager {
-	catalog, _ := NewTable(root, allocator, &catalogSchema)
+func newTableManager(root pager.PagePointer, allocator *pager.PageAllocator) *TableManager {
+	catalog, _ := newTable(root, allocator, &catalogSchema)
 
 	return &TableManager{
 		catalog:      catalog,
@@ -35,7 +35,7 @@ func NewTableManager(root pager.PagePointer, allocator *pager.PageAllocator) *Ta
 	}
 }
 
-func (manager *TableManager) Table(name string) (*Table, error) {
+func (manager *TableManager) table(name string) (*Table, error) {
 	if table, ok := manager.loadedTables[name]; ok {
 		return table, nil
 	}
@@ -55,7 +55,7 @@ func (manager *TableManager) Table(name string) (*Table, error) {
 	return manager.loadedTables[name], nil
 }
 
-func (manager *TableManager) UpdateTable(name string, table *Table) error {
+func (manager *TableManager) updateTable(name string, table *Table) error {
 	record := manager.encodeTable(table)
 
 	oldRecord, err := manager.catalog.Update(record)
@@ -74,8 +74,8 @@ func (manager *TableManager) UpdateTable(name string, table *Table) error {
 	return nil
 }
 
-func (manager *TableManager) CreateTable(schema *TableSchema) (*Table, error) {
-	table, err := NewTable(pager.NULL_PAGE, manager.allocator, schema)
+func (manager *TableManager) createTable(schema *TableSchema) (*Table, error) {
+	table, err := newTable(pager.NULL_PAGE, manager.allocator, schema)
 	if err != nil {
 		return nil, fmt.Errorf("Catalog: couldn't create table %s: %w", schema.Name, err)
 	}
@@ -96,7 +96,7 @@ func (manager *TableManager) CreateTable(schema *TableSchema) (*Table, error) {
 	return table, nil
 }
 
-func (manager *TableManager) DeleteTable(name string) error {
+func (manager *TableManager) deleteTable(name string) error {
 
 	oldRecord, err := manager.catalog.Delete(manager.tableQuery(name))
 	if err != nil {
@@ -114,7 +114,7 @@ func (manager *TableManager) DeleteTable(name string) error {
 	return nil
 }
 
-func (manager *TableManager) ChangeEvents() []TableEvent {
+func (manager *TableManager) changeEvents() []TableEvent {
 	events := make([]TableEvent, 0)
 
 	for _, table := range manager.loadedTables {
@@ -127,7 +127,7 @@ func (manager *TableManager) ChangeEvents() []TableEvent {
 	return events
 }
 
-func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (err error) {
+func (manager *TableManager) applyChangeEvents(changeEvents []TableEvent) (err error) {
 	// Save previous state to be able to rollback in case of error during apply
 	previousRootTable := manager.catalog.clone()
 
@@ -174,9 +174,9 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (err e
 	return nil
 }
 
-func (manager *TableManager) WriteTables() error {
+func (manager *TableManager) writeTables() error {
 	for name, table := range manager.loadedTables {
-		if err := manager.UpdateTable(name, table); err != nil {
+		if err := manager.updateTable(name, table); err != nil {
 			return fmt.Errorf("Catalog: couldn't write table %s: %w", name, err)
 		}
 	}
@@ -184,7 +184,7 @@ func (manager *TableManager) WriteTables() error {
 	return nil
 }
 
-func (manager *TableManager) Root() pager.PagePointer {
+func (manager *TableManager) root() pager.PagePointer {
 	return manager.catalog.Root()
 }
 
@@ -194,7 +194,7 @@ func (manager *TableManager) applyCreateTableEvent(event *events.CreateTable) er
 		return fmt.Errorf("CreateTable Apply: couldn't parse schema: %w", err)
 	}
 
-	table, err := manager.Table(event.TableName)
+	table, err := manager.table(event.TableName)
 	if err != nil {
 		return fmt.Errorf("CreateTable Replay: %w", err)
 	}
@@ -202,7 +202,7 @@ func (manager *TableManager) applyCreateTableEvent(event *events.CreateTable) er
 		return fmt.Errorf("CreateTable Apply: couldn't create table %s because it already exists", event.TableName)
 	}
 
-	if _, err := manager.CreateTable(&schema); err != nil {
+	if _, err := manager.createTable(&schema); err != nil {
 		return fmt.Errorf("CreateTable Apply: %w", err)
 	}
 
@@ -210,7 +210,7 @@ func (manager *TableManager) applyCreateTableEvent(event *events.CreateTable) er
 }
 
 func (manager *TableManager) applyDeleteTableEvent(event *events.DeleteTable) error {
-	table, err := manager.Table(event.TableName)
+	table, err := manager.table(event.TableName)
 	if err != nil {
 		return fmt.Errorf("DeleteTable Apply: %w", err)
 	}
@@ -218,7 +218,7 @@ func (manager *TableManager) applyDeleteTableEvent(event *events.DeleteTable) er
 		return fmt.Errorf("DeleteTable Apply: table %s not found", event.TableName)
 	}
 
-	if err := manager.DeleteTable(event.TableName); err != nil {
+	if err := manager.deleteTable(event.TableName); err != nil {
 		return fmt.Errorf("DeleteTable Apply: %w", err)
 	}
 
@@ -226,7 +226,7 @@ func (manager *TableManager) applyDeleteTableEvent(event *events.DeleteTable) er
 }
 
 func (manager *TableManager) applyDeleteEntryEvent(event *events.DeleteEntry) error {
-	table, err := manager.Table(event.TableName)
+	table, err := manager.table(event.TableName)
 	if err != nil {
 		return fmt.Errorf("DeleteEntry Apply: %w", err)
 	}
@@ -246,7 +246,7 @@ func (manager *TableManager) applyDeleteEntryEvent(event *events.DeleteEntry) er
 }
 
 func (manager *TableManager) applyUpdateEntryEvent(event *events.UpdateEntry) error {
-	table, err := manager.Table(event.TableName)
+	table, err := manager.table(event.TableName)
 	if err != nil {
 		return fmt.Errorf("UpdateEntry Apply: %w", err)
 	}
@@ -266,7 +266,7 @@ func (manager *TableManager) applyUpdateEntryEvent(event *events.UpdateEntry) er
 }
 
 func (manager *TableManager) applyInsertEntryEvent(event *events.InsertEntry) error {
-	table, err := manager.Table(event.TableName)
+	table, err := manager.table(event.TableName)
 	if err != nil {
 		return fmt.Errorf("InsertEntry Apply: %w", err)
 	}
@@ -296,7 +296,7 @@ func (manager *TableManager) decodeTable(record *vals.Object) *Table {
 	schema := &TableSchema{}
 	json.Unmarshal([]byte(definition), schema)
 
-	table, _ := NewTable(root, manager.allocator, schema)
+	table, _ := newTable(root, manager.allocator, schema)
 	return table
 }
 

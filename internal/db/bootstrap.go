@@ -6,19 +6,23 @@ import (
 	"os"
 )
 
-func setupStorage(config DatabaseConfig) (dbStorage store.Storage, err error) {
+func setupFS(config DatabaseConfig) (err error) {
 	if err := os.Mkdir(config.Directory, 0755); err != nil && !os.IsExist(err) {
-		return nil, fmt.Errorf("Bootstrap: failed to create storage directory: %w", err)
+		return fmt.Errorf("Bootstrap: failed to create storage directory: %w", err)
 	}
 
 	if err = os.Mkdir(config.WALDirectory, 0755); err != nil && !os.IsExist(err) {
-		return nil, fmt.Errorf("Bootstrap: failed to create WAL segment directory: %w", err)
+		return fmt.Errorf("Bootstrap: failed to create WAL segment directory: %w", err)
 	}
 
 	if err = os.Mkdir(config.WALArchiveDirectory, 0755); err != nil && !os.IsExist(err) {
-		return nil, fmt.Errorf("Bootstrap: failed to create WAL archive subdirectory: %w", err)
+		return fmt.Errorf("Bootstrap: failed to create WAL archive subdirectory: %w", err)
 	}
 
+	return nil
+}
+
+func newStorage(config DatabaseConfig) (dbStorage store.Storage, err error) {
 	initialSize := config.PageSize * 10
 
 	if config.InMemory {

@@ -59,32 +59,34 @@ type DatabaseConfig struct {
 func NewDatabase(config DatabaseConfig) (*Database, error) {
 	config = applyDefaults(config)
 
-	dbStorage, err := setupStorage(config)
-	if err != nil {
-		return nil, err
-	}
-
-	wal, err := NewWAL(config.WALDirectory, config.WALArchiveDirectory, config.WALSegmentSize)
-	if err != nil {
-		return nil, err
-	}
-
 	db := &Database{
-		wal:     wal,
-		config:  config,
-		storage: dbStorage,
+		config: config,
 
 		pagePool:     helpers.NewMinMap[DatabaseVersion, pager.PagePointer](func(i, j DatabaseVersion) bool { return i < j }),
 		transactions: helpers.NewMinMap[DatabaseVersion, *Transaction](func(i, j DatabaseVersion) bool { return i < j }),
 		commitQueue:  make(chan TransactionCommit, NUMBER_OF_PARALLEL_TRANSACTIONS),
 	}
 
-	if db.header, err = db.readHeader(); err != nil {
-		return nil, err
+	var err error
+
+	if err = setupFS(config); err != nil {
+		return nil, fmt.Errorf("Database: failed to setup filesystem: %w", err)
 	}
 
-	if err := db.recoverFromWAL(); err != nil {
-		return nil, err
+	if db.storage, err = newStorage(config); err != nil {
+		return nil, fmt.Errorf("Database: failed to setup storage: %w", err)
+	}
+
+	if db.wal, err = newWAL(config); err != nil {
+		return nil, fmt.Errorf("Database: failed to initialize WAL: %w", err)
+	}
+
+	if db.header, err = db.readHeader(); err != nil {
+		return nil, fmt.Errorf("Database: failed to read header: %w", err)
+	}
+
+	if err = db.recoverFromWAL(); err != nil {
+		return nil, fmt.Errorf("Database: failed to recover from WAL: %w", err)
 	}
 
 	go db.runCommitLoop()
@@ -97,7 +99,7 @@ func (db *Database) StartTransaction(request func(*Transaction)) error {
 	ctx, cancel := context.WithTimeout(context.Background(), TRANSACTION_TIMEOUT)
 	defer cancel()
 
-	transaction, err := NewTransaction(db, ctx)
+	transaction, err := db.createTransaction(ctx)
 	if err != nil {
 		return err
 	}
@@ -156,20 +158,20 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	latestUnreachableVersion := db.latestUnreachableVersion()
 
 	allocator := pager.NewPageAllocator(db.storage, db.header.pagesCount, db.config.PageSize, db.collectReleasedPages(latestUnreachableVersion)...)
-	manager := NewTableManager(db.header.root, allocator)
+	manager := newTableManager(db.header.root, allocator)
 
 	abortedTransactions := make([]TransactionCommit, 0)
 	approvedTransactions := make([]TransactionCommit, 0)
 
 	for _, transaction := range transactions {
-		if err := manager.ApplyChangeEvents(transaction.ChangeEvents); err != nil {
+		if err := manager.applyChangeEvents(transaction.ChangeEvents); err != nil {
 			abortedTransactions = append(abortedTransactions, transaction)
 		} else {
 			approvedTransactions = append(approvedTransactions, transaction)
 		}
 	}
 
-	if err := manager.WriteTables(); err != nil {
+	if err := manager.writeTables(); err != nil {
 		db.rejectTransactions(transactions, fmt.Errorf("Database: failed to write tables to to storage: %w", err))
 		return
 	}
@@ -178,7 +180,7 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	reusablePages := allocator.ReusablePages()
 
 	newHeader := &DatabaseHeader{
-		root:          manager.Root(),
+		root:          manager.root(),
 		version:       db.header.version + 1,
 		pagesCount:    allocator.TotalPages(),
 		transactionID: db.header.transactionID,
@@ -191,12 +193,12 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 		return
 	}
 
-	db.wal.AppendTransactions(approvedTransactions)
-	db.wal.AppendFreePages(latestUnreachableVersion, reusablePages) // These pages can be reused because they are not used by any active transaction (e.g. they were allocated and released in the same version)
-	db.wal.AppendFreePages(db.header.version, releasedPages)        // These pages will be ready to safely reused only since next db version since they can be still used by active transactions in the current version
-	db.wal.AppendVersionUpdate(db.header.version + 1)
+	db.wal.appendTransactions(approvedTransactions)
+	db.wal.appendFreePages(latestUnreachableVersion, reusablePages) // These pages can be reused because they are not used by any active transaction (e.g. they were allocated and released in the same version)
+	db.wal.appendFreePages(db.header.version, releasedPages)        // These pages will be ready to safely reused only since next db version since they can be still used by active transactions in the current version
+	db.wal.appendVersionUpdate(db.header.version + 1)
 
-	if err := db.wal.Sync(); err != nil {
+	if err := db.wal.sync(); err != nil {
 		db.rejectTransactions(transactions, fmt.Errorf("Database: WAL flush failed: %w", err))
 		return
 	}
@@ -228,6 +230,29 @@ func (db *Database) approveTransactions(transactions []TransactionCommit) {
 			Success: true,
 		}
 	}
+}
+
+func (db *Database) createTransaction(ctx context.Context) (*Transaction, error) {
+	db.mu.RLock()
+	header := db.header
+	db.mu.RUnlock()
+
+	tx := &Transaction{
+		id:      TransactionID(header.transactionID.Add(1)),
+		version: header.version,
+		manager: newTableManager(header.root, pager.NewPageAllocator(db.storage, header.pagesCount, db.config.PageSize)),
+
+		commitQueue: db.commitQueue,
+		ctx:         ctx,
+	}
+
+	tx.state.Store(int32(PROCESSING))
+
+	db.mu.Lock()
+	db.transactions.Add(tx.version, tx)
+	db.mu.Unlock()
+
+	return tx, nil
 }
 
 func (db *Database) collectReleasedPages(target DatabaseVersion) []pager.PagePointer {
@@ -265,10 +290,6 @@ func (db *Database) latestUnreachableVersion() DatabaseVersion {
 
 		db.transactions.PopMin()
 	}
-}
-
-func (db *Database) nextTransactionID() TransactionID {
-	return TransactionID(db.header.transactionID.Add(1))
 }
 
 func (db *Database) readHeader() (*DatabaseHeader, error) {
@@ -316,7 +337,7 @@ func (db *Database) serializeHeader(header *DatabaseHeader) []byte {
 }
 
 func (db *Database) recoverFromWAL() error {
-	latestSavedVersion, err := db.wal.LatestUpdatedVersion()
+	latestSavedVersion, err := db.wal.latestUpdatedVersion()
 	if err != nil {
 		return fmt.Errorf("Database: failed to get latest database version from WAL: %w", err)
 	}

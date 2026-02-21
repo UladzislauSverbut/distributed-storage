@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"distributed-storage/internal/pager"
 	"fmt"
 	"sync/atomic"
 )
@@ -41,34 +40,7 @@ const (
 )
 
 func NewTransaction(db *Database, ctx context.Context) (*Transaction, error) {
-	db.mu.RLock()
-	header := db.header
-	db.mu.RUnlock()
-
-	root := header.root
-	version := header.version
-	pagesCount := header.pagesCount
-
-	storage := db.storage
-	pageSize := db.config.PageSize
-
-	tx := &Transaction{
-		id:      db.nextTransactionID(),
-		version: version,
-
-		manager: NewTableManager(root, pager.NewPageAllocator(storage, pagesCount, pageSize)),
-
-		commitQueue: db.commitQueue,
-		ctx:         ctx,
-	}
-
-	tx.state.Store(int32(PROCESSING))
-
-	db.mu.Lock()
-	db.transactions.Add(version, tx)
-	db.mu.Unlock()
-
-	return tx, nil
+	return db.createTransaction(ctx)
 }
 
 func (tx *Transaction) Commit() (err error) {
@@ -86,7 +58,7 @@ func (tx *Transaction) Commit() (err error) {
 	}
 
 	// If there is nothing to write, then just return
-	if len(tx.manager.ChangeEvents()) == 0 {
+	if len(tx.manager.changeEvents()) == 0 {
 		tx.setCommitted()
 		return nil
 	}
@@ -97,7 +69,7 @@ func (tx *Transaction) Commit() (err error) {
 	tx.commitQueue <- TransactionCommit{
 		ID:              tx.id,
 		DatabaseVersion: tx.version,
-		ChangeEvents:    tx.manager.ChangeEvents(),
+		ChangeEvents:    tx.manager.changeEvents(),
 		Response:        responseChannel,
 	}
 
@@ -121,7 +93,7 @@ func (tx *Transaction) Rollback() {
 }
 
 func (tx *Transaction) Table(tableName string) (*Table, error) {
-	table, err := tx.manager.Table(tableName)
+	table, err := tx.manager.table(tableName)
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't get table %s: %w", tableName, err)
 	}
@@ -130,7 +102,7 @@ func (tx *Transaction) Table(tableName string) (*Table, error) {
 }
 
 func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
-	table, err := tx.manager.Table(schema.Name)
+	table, err := tx.manager.table(schema.Name)
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because of error during getting table: %w", schema.Name, err)
 	}
@@ -139,7 +111,7 @@ func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because it already exist", schema.Name)
 	}
 
-	table, err = tx.manager.CreateTable(schema)
+	table, err = tx.manager.createTable(schema)
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because of error during creating table: %w", schema.Name, err)
 	}

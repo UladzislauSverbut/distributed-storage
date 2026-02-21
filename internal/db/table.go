@@ -30,7 +30,7 @@ type Table struct {
 	allocator *pager.PageAllocator
 }
 
-func NewTable(root pager.PagePointer, allocator *pager.PageAllocator, schema *TableSchema) (*Table, error) {
+func newTable(root pager.PagePointer, allocator *pager.PageAllocator, schema *TableSchema) (*Table, error) {
 	kv := kv.NewKeyValue(root, allocator)
 	table := &Table{
 		kv:           kv,

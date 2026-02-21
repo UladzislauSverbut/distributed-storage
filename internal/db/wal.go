@@ -26,31 +26,31 @@ type WAL struct {
 	directory        string
 	archiveDirectory string
 
-	pendingLog         []byte
-	pendingArchivation bool
+	pendingLog     []byte
+	pendingArchive bool
 
 	mu sync.Mutex
 }
 
-func NewWAL(directory string, archiveDirectory string, segmentSize int) (*WAL, error) {
+func newWAL(config DatabaseConfig) (*WAL, error) {
 	wal := &WAL{
-		segmentSize: segmentSize,
+		segmentSize: config.WALSegmentSize,
 
-		directory:        directory,
-		archiveDirectory: archiveDirectory,
+		directory:        config.WALDirectory,
+		archiveDirectory: config.WALArchiveDirectory,
 
-		pendingLog:         []byte{},
-		pendingArchivation: false,
+		pendingLog:     []byte{},
+		pendingArchive: false,
 	}
 
 	var err error
 
-	if wal.segmentID, err = wal.findSegment(directory); err != nil {
+	if wal.segmentID, err = wal.findSegment(wal.directory); err != nil {
 		return nil, fmt.Errorf("WAL: failed to find existing segment: %w", err)
 	}
 
 	if wal.segmentID == 0 {
-		if wal.segmentID, err = wal.findSegment(archiveDirectory); err != nil {
+		if wal.segmentID, err = wal.findSegment(wal.archiveDirectory); err != nil {
 			return nil, fmt.Errorf("WAL: failed to find existing segment in archive directory: %w", err)
 		}
 	}
@@ -62,47 +62,47 @@ func NewWAL(directory string, archiveDirectory string, segmentSize int) (*WAL, e
 	return wal, nil
 }
 
-func (wal *WAL) AppendTransactions(transactions []TransactionCommit) {
+func (wal *WAL) appendTransactions(transactions []TransactionCommit) {
 	if len(transactions) == 0 {
 		return
 	}
 
 	for _, transaction := range transactions {
-		wal.AppendEvent(events.NewStartTransaction(uint64(transaction.ID)))
+		wal.appendEvent(events.NewStartTransaction(uint64(transaction.ID)))
 
 		for _, event := range transaction.ChangeEvents {
-			wal.AppendEvent(event)
+			wal.appendEvent(event)
 		}
 
-		wal.AppendEvent(events.NewCommitTransaction(uint64(transaction.ID)))
+		wal.appendEvent(events.NewCommitTransaction(uint64(transaction.ID)))
 	}
 }
 
-func (wal *WAL) AppendVersionUpdate(version DatabaseVersion) {
-	wal.AppendEvent(events.NewUpdateDBVersion(uint64(version)))
+func (wal *WAL) appendVersionUpdate(version DatabaseVersion) {
+	wal.appendEvent(events.NewUpdateDBVersion(uint64(version)))
 }
 
-func (wal *WAL) AppendFreePages(version DatabaseVersion, pages []pager.PagePointer) {
+func (wal *WAL) appendFreePages(version DatabaseVersion, pages []pager.PagePointer) {
 	if len(pages) == 0 {
 		return
 	}
 
-	wal.AppendEvent(events.NewFreePages(uint64(version), pages))
+	wal.appendEvent(events.NewFreePages(uint64(version), pages))
 }
 
-func (wal *WAL) LatestUpdatedVersion() (DatabaseVersion, error) {
+func (wal *WAL) latestUpdatedVersion() (DatabaseVersion, error) {
 	return 0, nil // TODO: Implement this method to read the latest version from the WAL
 }
 
-func (wal *WAL) ChangesSince(version DatabaseVersion) ([]TableEvent, error) {
+func (wal *WAL) changesSince(version DatabaseVersion) ([]TableEvent, error) {
 	return nil, nil // TODO: Implement this method to read all changes since the given version from the WAL
 }
 
-func (wal *WAL) AppendEvent(event TableEvent) {
+func (wal *WAL) appendEvent(event TableEvent) {
 	wal.pendingLog = append(wal.pendingLog, wal.decodeEvent(event)...)
 }
 
-func (wal *WAL) Sync() error {
+func (wal *WAL) sync() error {
 	wal.mu.Lock()
 
 	defer func() {
@@ -120,8 +120,8 @@ func (wal *WAL) Sync() error {
 
 	wal.segmentCapacity += int64(len(wal.pendingLog))
 
-	if !wal.pendingArchivation && wal.segmentFull(wal.segmentCapacity) {
-		wal.pendingArchivation = true
+	if !wal.pendingArchive && wal.segmentFull(wal.segmentCapacity) {
+		wal.pendingArchive = true
 		go wal.archiveSegment()
 	}
 
@@ -227,7 +227,7 @@ func (wal *WAL) archiveSegment() error {
 	wal.segment = segment
 	wal.segmentID = newSegmentID
 	wal.segmentCapacity = capacity
-	wal.pendingArchivation = false
+	wal.pendingArchive = false
 	wal.mu.Unlock()
 
 	if err := os.Rename(archivedSegment.Name(), wal.segmentName(wal.archiveDirectory, archivedSegmentID)); err != nil {
