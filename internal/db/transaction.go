@@ -4,10 +4,11 @@ import (
 	"context"
 	"distributed-storage/internal/pager"
 	"fmt"
+	"sync/atomic"
 )
 
 type TransactionID uint64
-type TransactionState int
+type TransactionState int32
 
 type TransactionCommit struct {
 	ID              TransactionID
@@ -25,7 +26,7 @@ type TransactionCommitResponse struct {
 type Transaction struct {
 	id      TransactionID
 	version DatabaseVersion
-	state   TransactionState
+	state   atomic.Int32 // It's reference to TransactionState but with atomic operations support
 	manager *TableManager
 
 	commitQueue chan<- TransactionCommit
@@ -55,12 +56,13 @@ func NewTransaction(db *Database, ctx context.Context) (*Transaction, error) {
 		id:      db.nextTransactionID(),
 		version: version,
 
-		state:   PROCESSING,
 		manager: NewTableManager(root, pager.NewPageAllocator(storage, pagesCount, pageSize)),
 
 		commitQueue: db.commitQueue,
 		ctx:         ctx,
 	}
+
+	tx.state.Store(int32(PROCESSING))
 
 	db.mu.Lock()
 	db.transactions.Add(version, tx)
@@ -146,32 +148,32 @@ func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
 }
 
 func (tx *Transaction) IsActive() bool {
-	return tx.state == PROCESSING || tx.state == COMMITTING
+	state := TransactionState(tx.state.Load())
+
+	return state == PROCESSING || state == COMMITTING
 }
 
 func (tx *Transaction) setCommitting() bool {
-	if tx.state != PROCESSING {
+
+	if TransactionState(tx.state.Load()) != PROCESSING {
 		return false
 	}
 
-	tx.state = COMMITTING
-	return true
+	return tx.state.CompareAndSwap(int32(PROCESSING), int32(COMMITTING))
 }
 
 func (tx *Transaction) setCommitted() bool {
-	if tx.state != COMMITTING {
+	if TransactionState(tx.state.Load()) != COMMITTING {
 		return false
 	}
 
-	tx.state = COMMITTED
-	return true
+	return tx.state.CompareAndSwap(int32(COMMITTING), int32(COMMITTED))
 }
 
 func (tx *Transaction) setAborted() bool {
-	if tx.state != COMMITTING {
+	if state := TransactionState(tx.state.Load()); state != COMMITTING {
 		return false
 	}
 
-	tx.state = ABORTED
-	return true
+	return tx.state.CompareAndSwap(int32(COMMITTING), int32(ABORTED))
 }

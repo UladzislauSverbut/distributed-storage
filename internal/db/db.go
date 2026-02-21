@@ -30,7 +30,7 @@ type DatabaseHeader struct {
 	root          pager.PagePointer
 	version       DatabaseVersion
 	pagesCount    uint64
-	transactionID *atomic.Uint64 // it's reference to TransactionID but with atomic operations support
+	transactionID *atomic.Uint64 // It's reference to TransactionID but with atomic operations support
 }
 
 type Database struct {
@@ -268,7 +268,6 @@ func (db *Database) latestUnreachableVersion() DatabaseVersion {
 }
 
 func (db *Database) nextTransactionID() TransactionID {
-
 	return TransactionID(db.header.transactionID.Add(1))
 }
 
