@@ -1,12 +1,14 @@
 package db
 
 import (
+	"bytes"
 	"distributed-storage/internal/events"
 	"distributed-storage/internal/helpers"
 	"distributed-storage/internal/pager"
 	"encoding/binary"
 	"hash/crc32"
 	"io"
+	"iter"
 	"os"
 	"sync"
 
@@ -91,6 +93,7 @@ func (wal *WAL) appendFreePages(version DatabaseVersion, pages []pager.PagePoint
 }
 
 func (wal *WAL) latestUpdatedVersion() (DatabaseVersion, error) {
+
 	return 0, nil // TODO: Implement this method to read the latest version from the WAL
 }
 
@@ -194,13 +197,20 @@ func (wal *WAL) openSegmentOrCreate(segmentID SegmentID) (segment *os.File, capa
 		}
 	}()
 
-	if segment, err = os.OpenFile(wal.segmentName(wal.directory, segmentID), os.O_RDWR|os.O_CREATE, 0644); err != nil {
+	if segment, err = os.OpenFile(wal.segmentName(wal.directory, segmentID), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644); err != nil {
 		err = fmt.Errorf("WAL: failed to open segment file: %w", err)
 		return
 	}
 
-	if capacity, err = segment.Seek(0, io.SeekEnd); err != nil {
-		err = fmt.Errorf("WAL: failed to seek to end of segment: %w", err)
+	stat, err := segment.Stat()
+	if err != nil {
+		err = fmt.Errorf("WAL: failed to stat segment: %w", err)
+		return
+	}
+
+	capacity = stat.Size()
+
+	if capacity > 0 {
 		return
 	}
 
@@ -247,4 +257,33 @@ func (wal *WAL) segmentName(directory string, segmentID SegmentID) string {
 
 func (wal *WAL) segmentFull(capacity int64) bool {
 	return capacity >= int64(wal.segmentSize)
+}
+
+func (wal *WAL) scanSegment(segment *os.File) iter.Seq[TableEvent] {
+	cursor := wal.segmentCapacity
+	buffer := make([]byte, 8096) // 4KB buffer for reading the segment file
+
+	return func(yield func(TableEvent) bool) {
+		for cursor > 0 {
+			cursor -= int64(len(buffer))
+			readBytes, err := segment.ReadAt(buffer, cursor)
+
+			if err == io.EOF {
+				return
+			}
+
+			lines := bytes.Split(buffer[:readBytes], []byte{'\n'})
+
+			for idx := len(lines) - 2; idx >= 0; idx-- { // Skip last line because it's always empty due to the trailing newline character
+				line := lines[idx]
+
+				if event, err := wal.encodeEvent(line); err != nil {
+					fmt.Printf("WAL: failed to decode event from segment: %v\n", err)
+					return
+				} else if !yield(event) {
+					return
+				}
+			}
+		}
+	}
 }
