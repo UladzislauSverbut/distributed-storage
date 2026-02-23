@@ -29,6 +29,7 @@ func (event *UpdateDBVersion) Serialize() []byte {
 	binary.LittleEndian.PutUint64(version, event.Version)
 
 	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, version...)
 
 	return serializedEvent
 }

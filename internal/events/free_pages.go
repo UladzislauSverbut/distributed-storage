@@ -46,12 +46,12 @@ func (event *FreePages) Serialize() []byte {
 func ParseFreePages(data []byte) (*FreePages, error) {
 	parts := helpers.SplitBy(data, ' ')
 
-	if len(parts) != 2 || string(parts[0]) != FREE_PAGES_EVENT {
+	if len(parts) != 3 || string(parts[0]) != FREE_PAGES_EVENT {
 		return nil, freePagesParsingError
 	}
 
-	serializedVersion := parts[0]
-	serializedPages := parts[1]
+	serializedVersion := parts[1]
+	serializedPages := parts[2]
 
 	version := binary.LittleEndian.Uint64(serializedVersion)
 	pages := make([]pager.PagePointer, (len(serializedPages) / 8))
