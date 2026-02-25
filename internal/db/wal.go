@@ -3,12 +3,14 @@ package db
 import (
 	"bufio"
 	"distributed-storage/internal/events"
+	"distributed-storage/internal/helpers"
 	"distributed-storage/internal/pager"
 	"encoding/binary"
 	"hash/crc32"
 	"io"
 	"iter"
 	"os"
+	"slices"
 	"sync"
 
 	"fmt"
@@ -98,7 +100,7 @@ func (wal *WAL) changesSince(version DatabaseVersion) ([]TableEvent, error) {
 	segment := wal.segment
 	segmentID := wal.segmentID
 
-	changes := []TableEvent{}
+	changes := [][]TableEvent{}
 	shouldScanNextSegment := true
 
 	for shouldScanNextSegment {
@@ -109,7 +111,7 @@ func (wal *WAL) changesSince(version DatabaseVersion) ([]TableEvent, error) {
 
 			if versionEvent, ok := event.(*events.UpdateDBVersion); ok && versionEvent.Version == uint64(version) {
 				shouldScanNextSegment = false
-				segmentChanges = []TableEvent{} // Clear changes collected so far as they are from a previous version
+				segmentChanges = nil // Clear changes collected so far as they are from a previous version
 			}
 		}
 
@@ -125,11 +127,13 @@ func (wal *WAL) changesSince(version DatabaseVersion) ([]TableEvent, error) {
 
 			segmentID--
 			segment = nextSegment
-			changes = append(segmentChanges, changes...)
+			changes = append(changes, segmentChanges)
 		}
 	}
 
-	return changes, nil
+	slices.Reverse(changes)
+
+	return helpers.Flatten(changes), nil
 }
 
 func (wal *WAL) appendEvent(event TableEvent) {

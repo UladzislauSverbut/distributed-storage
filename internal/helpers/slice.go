@@ -104,3 +104,21 @@ func SplitBy(data []byte, separator byte) [][]byte {
 
 	return append(parts, currentPart)
 }
+
+func Flatten[T comparable](slices [][]T) []T {
+	itemsCont := 0
+
+	for _, slice := range slices {
+		itemsCont += len(slice)
+	}
+
+	flattened := make([]T, itemsCont)
+	offset := 0
+
+	for _, slice := range slices {
+		copy(flattened[offset:], slice)
+		offset += len(slice)
+	}
+
+	return flattened
+}
