@@ -56,7 +56,7 @@ func newWAL(config DatabaseConfig) (*WAL, error) {
 		}
 	}
 
-	if wal.segment, wal.segmentCapacity, err = wal.openSegmentOrCreate(wal.segmentID); err != nil {
+	if wal.segment, wal.segmentCapacity, err = wal.openSegmentOrCreate(wal.segmentID, wal.directory); err != nil {
 		return nil, fmt.Errorf("WAL: failed to open existing segment file: %w", err)
 	}
 
@@ -91,13 +91,45 @@ func (wal *WAL) appendFreePages(version DatabaseVersion, pages []pager.PagePoint
 	wal.appendEvent(events.NewFreePages(uint64(version), pages))
 }
 
-func (wal *WAL) latestUpdatedVersion() (DatabaseVersion, error) {
-
-	return 0, nil // TODO: Implement this method to read the latest version from the WAL
-}
-
 func (wal *WAL) changesSince(version DatabaseVersion) ([]TableEvent, error) {
-	return nil, nil // TODO: Implement this method to read all changes since the given version from the WAL
+	wal.mu.Lock()
+	defer wal.mu.Unlock()
+
+	segment := wal.segment
+	segmentID := wal.segmentID
+
+	changes := []TableEvent{}
+	shouldScanNextSegment := true
+
+	for shouldScanNextSegment {
+		segmentChanges := []TableEvent{}
+
+		for event := range wal.scanSegment(segment) {
+			segmentChanges = append(segmentChanges, event)
+
+			if versionEvent, ok := event.(*events.UpdateDBVersion); ok && versionEvent.Version == uint64(version) {
+				shouldScanNextSegment = false
+				segmentChanges = []TableEvent{} // Clear changes collected so far as they are from a previous version
+			}
+		}
+
+		if shouldScanNextSegment {
+			if segmentID == 0 {
+				break
+			}
+			nextSegment, _, err := wal.openSegmentOrCreate(segmentID-1, wal.archiveDirectory)
+
+			if err != nil {
+				return nil, fmt.Errorf("WAL: failed to open previous segment file: %w", err)
+			}
+
+			segmentID--
+			segment = nextSegment
+			changes = append(segmentChanges, changes...)
+		}
+	}
+
+	return changes, nil
 }
 
 func (wal *WAL) appendEvent(event TableEvent) {
@@ -136,8 +168,8 @@ func (wal *WAL) decodeEvent(event TableEvent) []byte {
 
 	row := make([]byte, 8+size) // 8 Bytes for size and hash, then the event data
 
-	binary.BigEndian.PutUint32(row, size)
-	binary.BigEndian.PutUint32(row[4:], crc32.ChecksumIEEE(data))
+	binary.LittleEndian.PutUint32(row, size)
+	binary.LittleEndian.PutUint32(row[4:], crc32.ChecksumIEEE(data))
 
 	copy(row[8:], data)
 
@@ -149,8 +181,8 @@ func (wal *WAL) encodeEvent(row []byte) (TableEvent, int, error) {
 		return nil, 0, nil
 	}
 
-	size := binary.BigEndian.Uint32(row)
-	hash := binary.BigEndian.Uint32(row[4:8])
+	size := binary.LittleEndian.Uint32(row)
+	hash := binary.LittleEndian.Uint32(row[4:8])
 
 	if len(row) < int(8+size) {
 		return nil, 0, nil
@@ -189,14 +221,14 @@ func (WAL *WAL) findSegment(directory string) (SegmentID, error) {
 	return segmentID, nil
 }
 
-func (wal *WAL) openSegmentOrCreate(segmentID SegmentID) (segment *os.File, capacity int64, err error) {
+func (wal *WAL) openSegmentOrCreate(segmentID SegmentID, directory string) (segment *os.File, capacity int64, err error) {
 	defer func() {
 		if err != nil && segment != nil {
 			segment.Close()
 		}
 	}()
 
-	if segment, err = os.OpenFile(wal.segmentName(wal.directory, segmentID), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644); err != nil {
+	if segment, err = os.OpenFile(wal.segmentName(directory, segmentID), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644); err != nil {
 		err = fmt.Errorf("WAL: failed to open segment file: %w", err)
 		return
 	}
@@ -209,7 +241,7 @@ func (wal *WAL) archiveSegment() error {
 	archivedSegmentID := wal.segmentID
 	newSegmentID := wal.segmentID + 1
 
-	segment, capacity, err := wal.openSegmentOrCreate(newSegmentID)
+	segment, capacity, err := wal.openSegmentOrCreate(newSegmentID, wal.directory)
 
 	if err != nil {
 		return fmt.Errorf("WAL: failed to archive active segment: %w", err)
