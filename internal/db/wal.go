@@ -1,9 +1,8 @@
 package db
 
 import (
-	"bytes"
+	"bufio"
 	"distributed-storage/internal/events"
-	"distributed-storage/internal/helpers"
 	"distributed-storage/internal/pager"
 	"encoding/binary"
 	"hash/crc32"
@@ -135,40 +134,40 @@ func (wal *WAL) decodeEvent(event TableEvent) []byte {
 	data := event.Serialize()
 	size := uint32(len(data))
 
-	row := make([]byte, 8+size+1) // 8 Bytes for size and hash, then the event data, and 1 byte for a newline character
+	row := make([]byte, 8+size) // 8 Bytes for size and hash, then the event data
 
 	binary.BigEndian.PutUint32(row, size)
 	binary.BigEndian.PutUint32(row[4:], crc32.ChecksumIEEE(data))
 
 	copy(row[8:], data)
-	row[len(row)-1] = '\n' // Add a newline character at the end of the row
 
 	return row
 }
 
-func (wal *WAL) encodeEvent(row []byte) (TableEvent, error) {
+func (wal *WAL) encodeEvent(row []byte) (TableEvent, int, error) {
 	if len(row) < 8 {
-		return nil, fmt.Errorf("WAL: invalid row size")
+		return nil, 0, nil
 	}
 
 	size := binary.BigEndian.Uint32(row)
 	hash := binary.BigEndian.Uint32(row[4:8])
 
-	if uint32(len(row[8:])) != size {
-		return nil, fmt.Errorf("WAL: row size mismatch")
+	if len(row) < int(8+size) {
+		return nil, 0, nil
 	}
 
-	data := row[8:]
+	data := row[8 : size+8]
+
 	if crc32.ChecksumIEEE(data) != hash {
-		return nil, fmt.Errorf("WAL: row checksum mismatch")
+		return nil, 0, fmt.Errorf("WAL: row checksum mismatch")
 	}
 
 	event, err := events.Parse(data)
 	if err != nil {
-		return nil, fmt.Errorf("WAL: failed to deserialize event: %w", err)
+		return nil, 0, fmt.Errorf("WAL: failed to deserialize event: %w", err)
 	}
 
-	return event, nil
+	return event, int(size) + 8, nil
 }
 
 func (WAL *WAL) findSegment(directory string) (SegmentID, error) {
@@ -199,23 +198,6 @@ func (wal *WAL) openSegmentOrCreate(segmentID SegmentID) (segment *os.File, capa
 
 	if segment, err = os.OpenFile(wal.segmentName(wal.directory, segmentID), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644); err != nil {
 		err = fmt.Errorf("WAL: failed to open segment file: %w", err)
-		return
-	}
-
-	stat, err := segment.Stat()
-	if err != nil {
-		err = fmt.Errorf("WAL: failed to stat segment: %w", err)
-		return
-	}
-
-	capacity = stat.Size()
-
-	if capacity > 0 {
-		return
-	}
-
-	if _, err = helpers.IncreaseFileSize(segment, wal.segmentSize); err != nil {
-		err = fmt.Errorf("WAL: failed to set segment file size: %w", err)
 		return
 	}
 
@@ -260,29 +242,39 @@ func (wal *WAL) segmentFull(capacity int64) bool {
 }
 
 func (wal *WAL) scanSegment(segment *os.File) iter.Seq[TableEvent] {
-	cursor := wal.segmentCapacity
-	buffer := make([]byte, 8096) // 4KB buffer for reading the segment file
-
 	return func(yield func(TableEvent) bool) {
-		for cursor > 0 {
-			cursor -= int64(len(buffer))
-			readBytes, err := segment.ReadAt(buffer, cursor)
+		const chunkSize = 4096 // Read the segment in chunks to avoid loading the entire file into memory
+
+		reader := bufio.NewReaderSize(segment, chunkSize)
+
+		accumulator := make([]byte, 0, 2*chunkSize)
+		chunk := make([]byte, chunkSize)
+
+		for {
+			readBytes, err := reader.Read(chunk)
+			accumulator = append(accumulator, chunk[:readBytes]...)
+
+			for len(accumulator) > 0 {
+				event, consumed, err := wal.encodeEvent(accumulator)
+
+				if err != nil {
+					fmt.Printf("WAL: failed to decode event: %v\n", err)
+					return
+				}
+
+				if consumed == 0 {
+					break // Need to read more data to decode a full event
+				}
+
+				accumulator = accumulator[consumed:]
+
+				if !yield(event) {
+					return
+				}
+			}
 
 			if err == io.EOF {
 				return
-			}
-
-			lines := bytes.Split(buffer[:readBytes], []byte{'\n'})
-
-			for idx := len(lines) - 2; idx >= 0; idx-- { // Skip last line because it's always empty due to the trailing newline character
-				line := lines[idx]
-
-				if event, err := wal.encodeEvent(line); err != nil {
-					fmt.Printf("WAL: failed to decode event from segment: %v\n", err)
-					return
-				} else if !yield(event) {
-					return
-				}
 			}
 		}
 	}

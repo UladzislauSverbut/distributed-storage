@@ -1,7 +1,8 @@
 package events
 
 import (
-	"distributed-storage/internal/helpers"
+	"bytes"
+	"encoding/binary"
 	"errors"
 )
 
@@ -26,25 +27,51 @@ func (event *UpdateEntry) Name() string {
 
 func (event *UpdateEntry) Serialize() []byte {
 	serializedEvent := []byte(event.Name())
+	serializedTableNameLength := make([]byte, 8)
+	keyLength := make([]byte, 8)
+	oldValueLength := make([]byte, 8)
 
-	serializedEvent = append(serializedEvent, ' ')
+	binary.LittleEndian.PutUint64(serializedTableNameLength, uint64(len(event.TableName)))
+	binary.LittleEndian.PutUint64(keyLength, uint64(len(event.Key)))
+	binary.LittleEndian.PutUint64(oldValueLength, uint64(len(event.OldValue)))
+
+	serializedEvent = append(serializedEvent, serializedTableNameLength...)
 	serializedEvent = append(serializedEvent, []byte(event.TableName)...)
-	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, keyLength...)
 	serializedEvent = append(serializedEvent, event.Key...)
-	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, oldValueLength...)
 	serializedEvent = append(serializedEvent, event.OldValue...)
-	serializedEvent = append(serializedEvent, ' ')
 	serializedEvent = append(serializedEvent, event.NewValue...)
 
 	return serializedEvent
 }
 
 func ParseUpdateEntry(data []byte) (*UpdateEntry, error) {
-	parts := helpers.SplitBy(data, ' ')
+	offset := len(UPDATE_ENTRY_EVENT)
 
-	if len(parts) != 5 || string(parts[0]) != UPDATE_ENTRY_EVENT {
+	if !bytes.Equal(data[0:offset], []byte(UPDATE_ENTRY_EVENT)) {
 		return nil, updateEntryParsingError
 	}
 
-	return NewUpdateEntry(string(parts[1]), parts[2], parts[3], parts[4]), nil
+	serializedTableNameLength := binary.LittleEndian.Uint64(data[offset : offset+8])
+	offset += 8
+
+	tableName := string(data[offset : offset+int(serializedTableNameLength)])
+	offset += int(serializedTableNameLength)
+
+	keyLength := binary.LittleEndian.Uint64(data[offset : offset+8])
+	offset += 8
+
+	key := data[offset : offset+int(keyLength)]
+	offset += int(keyLength)
+
+	oldValueLength := binary.LittleEndian.Uint64(data[offset : offset+8])
+	offset += 8
+
+	oldValue := data[offset : offset+int(oldValueLength)]
+	offset += int(oldValueLength)
+
+	newValue := data[offset:]
+
+	return NewUpdateEntry(tableName, key, oldValue, newValue), nil
 }

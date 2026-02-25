@@ -1,6 +1,7 @@
 package events
 
 import (
+	"bytes"
 	"fmt"
 )
 
@@ -13,37 +14,28 @@ type Event interface {
 
 // ParseEvent identifies and parses a serialized event by its name prefix.
 func Parse(data []byte) (Event, error) {
-	eventName := ""
-
-	for _, char := range data {
-		if char == ' ' {
-			break
-		}
-		eventName += string(char)
-	}
-
-	switch eventName {
-	case START_TRANSACTION_EVENT:
+	switch {
+	case bytes.HasPrefix(data, []byte(START_TRANSACTION_EVENT)):
 		return ParseStartTransaction(data)
-	case COMMIT_TRANSACTION_EVENT:
+	case bytes.HasPrefix(data, []byte(COMMIT_TRANSACTION_EVENT)):
 		return ParseCommitTransaction(data)
-	case INSERT_ENTRY_EVENT:
+	case bytes.HasPrefix(data, []byte(INSERT_ENTRY_EVENT)):
 		return ParseInsertEntry(data)
-	case DELETE_ENTRY_EVENT:
+	case bytes.HasPrefix(data, []byte(DELETE_ENTRY_EVENT)):
 		return ParseDeleteEntry(data)
-	case UPDATE_ENTRY_EVENT:
+	case bytes.HasPrefix(data, []byte(UPDATE_ENTRY_EVENT)):
 		return ParseUpdateEntry(data)
-	case CREATE_TABLE_EVENT:
+	case bytes.HasPrefix(data, []byte(CREATE_TABLE_EVENT)):
 		return ParseCreateTable(data)
-	case DELETE_TABLE_EVENT:
+	case bytes.HasPrefix(data, []byte(DELETE_TABLE_EVENT)):
 		return ParseDeleteTable(data)
-	case UPDATE_TABLE_EVENT:
+	case bytes.HasPrefix(data, []byte(UPDATE_TABLE_EVENT)):
 		return ParseUpdateTable(data)
-	case UPDATE_DB_VERSION:
+	case bytes.HasPrefix(data, []byte(UPDATE_DB_VERSION)):
 		return ParseUpdateDBVersion(data)
-	case FREE_PAGES_EVENT:
+	case bytes.HasPrefix(data, []byte(FREE_PAGES_EVENT)):
 		return ParseFreePages(data)
 	default:
-		return nil, fmt.Errorf("events: unknown event type: %s", eventName)
+		return nil, fmt.Errorf("events: unknown event type")
 	}
 }

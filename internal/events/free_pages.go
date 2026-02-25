@@ -1,7 +1,7 @@
 package events
 
 import (
-	"distributed-storage/internal/helpers"
+	"bytes"
 	"distributed-storage/internal/pager"
 	"encoding/binary"
 	"errors"
@@ -35,26 +35,24 @@ func (event *FreePages) Serialize() []byte {
 
 	binary.LittleEndian.PutUint64(version, event.Version)
 
-	serializedEvent = append(serializedEvent, ' ')
 	serializedEvent = append(serializedEvent, version...)
-	serializedEvent = append(serializedEvent, ' ')
 	serializedEvent = append(serializedEvent, pages...)
 
 	return serializedEvent
 }
 
 func ParseFreePages(data []byte) (*FreePages, error) {
-	parts := helpers.SplitBy(data, ' ')
+	offset := len(FREE_PAGES_EVENT)
 
-	if len(parts) != 3 || string(parts[0]) != FREE_PAGES_EVENT {
+	if !bytes.Equal(data[:offset], []byte(FREE_PAGES_EVENT)) {
 		return nil, freePagesParsingError
 	}
 
-	serializedVersion := parts[1]
-	serializedPages := parts[2]
+	serializedVersion := data[offset : offset+8]
+	serializedPages := data[offset+8:]
 
 	version := binary.LittleEndian.Uint64(serializedVersion)
-	pages := make([]pager.PagePointer, (len(serializedPages) / 8))
+	pages := make([]pager.PagePointer, len(serializedPages)/8)
 
 	for idx := 0; idx < len(serializedPages)/8; idx++ {
 		pages[idx] = binary.LittleEndian.Uint64(serializedPages[idx*8:])

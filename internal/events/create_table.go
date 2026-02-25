@@ -1,7 +1,8 @@
 package events
 
 import (
-	"distributed-storage/internal/helpers"
+	"bytes"
+	"encoding/binary"
 	"errors"
 )
 
@@ -25,21 +26,32 @@ func (event *CreateTable) Name() string {
 
 func (event *CreateTable) Serialize() []byte {
 	serializedEvent := []byte(event.Name())
+	serializedTableName := []byte(event.TableName)
+	serializedTableNameLength := make([]byte, 8)
 
-	serializedEvent = append(serializedEvent, ' ')
-	serializedEvent = append(serializedEvent, []byte(event.TableName)...)
-	serializedEvent = append(serializedEvent, ' ')
+	binary.LittleEndian.PutUint64(serializedTableNameLength, uint64(len(serializedTableName)))
+
+	serializedEvent = append(serializedEvent, serializedTableNameLength...)
+	serializedEvent = append(serializedEvent, serializedTableName...)
 	serializedEvent = append(serializedEvent, event.Schema...)
 
 	return serializedEvent
 }
 
 func ParseCreateTable(data []byte) (*CreateTable, error) {
-	parts := helpers.SplitBy(data, ' ')
+	offset := len(CREATE_TABLE_EVENT)
 
-	if len(parts) != 3 || string(parts[0]) != CREATE_TABLE_EVENT {
+	if !bytes.Equal(data[:offset], []byte(CREATE_TABLE_EVENT)) {
 		return nil, createTableParsingError
 	}
 
-	return NewCreateTable(string(parts[1]), parts[2]), nil
+	serializedTableNameLength := binary.LittleEndian.Uint64(data[offset : offset+8])
+	offset += 8
+
+	tableName := string(data[offset : offset+int(serializedTableNameLength)])
+	offset += int(serializedTableNameLength)
+
+	schema := data[offset:]
+
+	return NewCreateTable(tableName, schema), nil
 }

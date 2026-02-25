@@ -1,7 +1,7 @@
 package events
 
 import (
-	"distributed-storage/internal/helpers"
+	"bytes"
 	"encoding/binary"
 	"errors"
 )
@@ -24,24 +24,24 @@ func (event *CommitTransaction) Name() string {
 
 func (event *CommitTransaction) Serialize() []byte {
 	serializedEvent := []byte(event.Name())
-	transactionID := make([]byte, 8)
+	serializedID := make([]byte, 8)
 
-	binary.LittleEndian.PutUint64(transactionID, event.ID)
+	binary.LittleEndian.PutUint64(serializedID, event.ID)
 
-	serializedEvent = append(serializedEvent, ' ')
-	serializedEvent = append(serializedEvent, transactionID...)
+	serializedEvent = append(serializedEvent, serializedID...)
 
 	return serializedEvent
 }
 
 func ParseCommitTransaction(data []byte) (*CommitTransaction, error) {
-	parts := helpers.SplitBy(data, ' ')
-
-	if len(parts) != 2 || string(parts[0]) != COMMIT_TRANSACTION_EVENT {
+	offset := len(COMMIT_TRANSACTION_EVENT)
+	if !bytes.Equal(data[:offset], []byte(COMMIT_TRANSACTION_EVENT)) {
 		return nil, commitTransactionParsingError
 	}
 
+	serializedID := data[offset : offset+8]
+
 	return &CommitTransaction{
-		ID: binary.LittleEndian.Uint64(parts[1]),
+		ID: binary.LittleEndian.Uint64(serializedID),
 	}, nil
 }

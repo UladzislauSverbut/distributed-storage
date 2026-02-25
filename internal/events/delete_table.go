@@ -1,7 +1,7 @@
 package events
 
 import (
-	"distributed-storage/internal/helpers"
+	"bytes"
 	"errors"
 )
 
@@ -23,19 +23,19 @@ func (event *DeleteTable) Name() string {
 
 func (event *DeleteTable) Serialize() []byte {
 	serializedEvent := []byte(event.Name())
-
-	serializedEvent = append(serializedEvent, ' ')
 	serializedEvent = append(serializedEvent, []byte(event.TableName)...)
 
 	return serializedEvent
 }
 
 func ParseDeleteTable(data []byte) (*DeleteTable, error) {
-	parts := helpers.SplitBy(data, ' ')
+	offset := len(DELETE_TABLE_EVENT)
 
-	if len(parts) != 2 || string(parts[0]) != DELETE_TABLE_EVENT {
+	if !bytes.Equal(data[:offset], []byte(DELETE_TABLE_EVENT)) {
 		return nil, deleteTableParsingError
 	}
 
-	return NewDeleteTable(string(parts[1])), nil
+	tableName := string(data[offset:])
+
+	return NewDeleteTable(tableName), nil
 }

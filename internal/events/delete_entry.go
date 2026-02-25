@@ -1,7 +1,8 @@
 package events
 
 import (
-	"distributed-storage/internal/helpers"
+	"bytes"
+	"encoding/binary"
 	"errors"
 )
 
@@ -25,23 +26,41 @@ func (event *DeleteEntry) Name() string {
 
 func (event *DeleteEntry) Serialize() []byte {
 	serializedEvent := []byte(event.Name())
+	serializedTableNameLength := make([]byte, 8)
+	serializedKeyLength := make([]byte, 8)
 
-	serializedEvent = append(serializedEvent, ' ')
+	binary.LittleEndian.PutUint64(serializedTableNameLength, uint64(len(event.TableName)))
+	binary.LittleEndian.PutUint64(serializedKeyLength, uint64(len(event.Key)))
+
+	serializedEvent = append(serializedEvent, serializedTableNameLength...)
 	serializedEvent = append(serializedEvent, []byte(event.TableName)...)
-	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, serializedKeyLength...)
 	serializedEvent = append(serializedEvent, event.Key...)
-	serializedEvent = append(serializedEvent, ' ')
 	serializedEvent = append(serializedEvent, event.Value...)
 
 	return serializedEvent
 }
 
 func ParseDeleteEntry(data []byte) (*DeleteEntry, error) {
-	parts := helpers.SplitBy(data, ' ')
+	offset := len(DELETE_ENTRY_EVENT)
 
-	if len(parts) != 4 || string(parts[0]) != DELETE_ENTRY_EVENT {
+	if !bytes.Equal(data[:offset], []byte(DELETE_ENTRY_EVENT)) {
 		return nil, deleteEntryParsingError
 	}
 
-	return NewDeleteEntry(string(parts[1]), parts[2], parts[3]), nil
+	serializedTableNameLength := binary.LittleEndian.Uint64(data[offset : offset+8])
+	offset += 8
+
+	tableName := string(data[offset : offset+int(serializedTableNameLength)])
+	offset += int(serializedTableNameLength)
+
+	keyLength := binary.LittleEndian.Uint64(data[offset : offset+8])
+	offset += 8
+
+	key := data[offset : offset+int(keyLength)]
+	offset += int(keyLength)
+
+	value := data[offset:]
+
+	return NewDeleteEntry(tableName, key, value), nil
 }

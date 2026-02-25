@@ -1,7 +1,8 @@
 package events
 
 import (
-	"distributed-storage/internal/helpers"
+	"bytes"
+	"encoding/binary"
 	"errors"
 )
 
@@ -26,23 +27,41 @@ func (event *UpdateTable) Name() string {
 
 func (event *UpdateTable) Serialize() []byte {
 	serializedEvent := []byte(event.Name())
+	serializedTableNameLength := make([]byte, 8)
+	oldSchemaLength := make([]byte, 8)
 
-	serializedEvent = append(serializedEvent, ' ')
+	binary.LittleEndian.PutUint64(serializedTableNameLength, uint64(len(event.TableName)))
+	binary.LittleEndian.PutUint64(oldSchemaLength, uint64(len(event.OldSchema)))
+
+	serializedEvent = append(serializedEvent, serializedTableNameLength...)
 	serializedEvent = append(serializedEvent, []byte(event.TableName)...)
-	serializedEvent = append(serializedEvent, ' ')
+	serializedEvent = append(serializedEvent, oldSchemaLength...)
 	serializedEvent = append(serializedEvent, event.OldSchema...)
-	serializedEvent = append(serializedEvent, ' ')
 	serializedEvent = append(serializedEvent, event.NewSchema...)
 
 	return serializedEvent
 }
 
 func ParseUpdateTable(data []byte) (*UpdateTable, error) {
-	parts := helpers.SplitBy(data, ' ')
+	offset := len(UPDATE_TABLE_EVENT)
 
-	if len(parts) != 4 || string(parts[0]) != UPDATE_TABLE_EVENT {
+	if !bytes.Equal(data[0:offset], []byte(UPDATE_TABLE_EVENT)) {
 		return nil, updateTableParsingError
 	}
 
-	return NewUpdateTable(string(parts[1]), parts[2], parts[3]), nil
+	serializedTableNameLength := binary.LittleEndian.Uint64(data[offset : offset+8])
+	offset += 8
+
+	tableName := string(data[offset : offset+int(serializedTableNameLength)])
+	offset += int(serializedTableNameLength)
+
+	oldSchemaLength := binary.LittleEndian.Uint64(data[offset : offset+8])
+	offset += 8
+
+	oldSchema := data[offset : offset+int(oldSchemaLength)]
+	offset += int(oldSchemaLength)
+
+	newSchema := data[offset:]
+
+	return NewUpdateTable(tableName, oldSchema, newSchema), nil
 }

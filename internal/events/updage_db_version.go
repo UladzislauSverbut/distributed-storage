@@ -1,7 +1,7 @@
 package events
 
 import (
-	"distributed-storage/internal/helpers"
+	"bytes"
 	"encoding/binary"
 	"errors"
 )
@@ -24,24 +24,25 @@ func (event *UpdateDBVersion) Name() string {
 
 func (event *UpdateDBVersion) Serialize() []byte {
 	serializedEvent := []byte(event.Name())
-	version := make([]byte, 8)
+	serializedVersion := make([]byte, 8)
 
-	binary.LittleEndian.PutUint64(version, event.Version)
+	binary.LittleEndian.PutUint64(serializedVersion, event.Version)
 
-	serializedEvent = append(serializedEvent, ' ')
-	serializedEvent = append(serializedEvent, version...)
+	serializedEvent = append(serializedEvent, serializedVersion...)
 
 	return serializedEvent
 }
 
 func ParseUpdateDBVersion(data []byte) (*UpdateDBVersion, error) {
-	parts := helpers.SplitBy(data, ' ')
+	offset := len(UPDATE_DB_VERSION)
 
-	if len(parts) != 2 || string(parts[0]) != UPDATE_DB_VERSION {
+	if !bytes.Equal(data[0:offset], []byte(UPDATE_DB_VERSION)) {
 		return nil, updateDBVersionParsingError
 	}
 
+	serializedVersion := data[offset : offset+8]
+
 	return &UpdateDBVersion{
-		Version: binary.LittleEndian.Uint64(parts[1]),
+		Version: binary.LittleEndian.Uint64(serializedVersion),
 	}, nil
 }
