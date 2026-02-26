@@ -121,6 +121,8 @@ func (wal *WAL) eventsSince(version DatabaseVersion) ([]TableEvent, error) {
 			}
 		}
 
+		changes = append(changes, segmentChanges)
+
 		if changesFound || segmentID == INITIAL_SEGMENT_ID { // If changes for the requested version are found or we have reached the initial segment, stop scanning further
 			break
 		}
@@ -134,7 +136,6 @@ func (wal *WAL) eventsSince(version DatabaseVersion) ([]TableEvent, error) {
 
 		segment = nextSegment
 		segmentID -= 1
-		changes = append(changes, segmentChanges)
 	}
 
 	if !changesFound {
@@ -253,6 +254,15 @@ func (wal *WAL) openSegment(segmentID SegmentID, directory string) (segment *os.
 		err = fmt.Errorf("WAL: failed to open segment file: %w", err)
 		return
 	}
+
+	stat, err := segment.Stat()
+
+	if err != nil {
+		err = fmt.Errorf("WAL: failed to stat segment file: %w", err)
+		return
+	}
+
+	capacity = stat.Size()
 
 	return
 }

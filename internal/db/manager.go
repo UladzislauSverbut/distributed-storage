@@ -162,6 +162,7 @@ func (manager *TableManager) applyChangeEvents(changeEvents []TableEvent) (err e
 			}
 		case *events.StartTransaction,
 			*events.CommitTransaction,
+			*events.UpdateDBVersion,
 			*events.FreePages:
 			// These events are not related to table schema or entries, so we can ignore them during replay
 			continue
