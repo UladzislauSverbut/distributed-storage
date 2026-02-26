@@ -15,6 +15,7 @@ import (
 
 const DB_STORAGE_SIGNATURE = "DISTRIBUTED_DB_STORAGE" // Signature to identify and validate database storage file
 const HEADER_SIZE = len(DB_STORAGE_SIGNATURE) + 32
+const INITIAL_DB_VERSION DatabaseVersion = 1
 
 // Bytes
 const NUMBER_OF_PARALLEL_TRANSACTIONS = 1024 // Max number of parallel transactions
@@ -77,16 +78,16 @@ func NewDatabase(config DatabaseConfig) (*Database, error) {
 		return nil, fmt.Errorf("Database: failed to setup storage: %w", err)
 	}
 
-	if db.wal, err = newWAL(config); err != nil {
-		return nil, fmt.Errorf("Database: failed to initialize WAL: %w", err)
-	}
-
 	if db.header, err = db.readHeader(); err != nil {
 		return nil, fmt.Errorf("Database: failed to read header: %w", err)
 	}
 
-	if err = db.recoverFromWAL(); err != nil {
-		return nil, fmt.Errorf("Database: failed to recover from WAL: %w", err)
+	if db.wal, err = newWAL(config); err != nil {
+		return nil, fmt.Errorf("Database: failed to initialize WAL: %w", err)
+	}
+
+	if err = db.openWAL(); err != nil {
+		return nil, fmt.Errorf("Database: failed to initialize or recover WAL: %w", err)
 	}
 
 	go db.runCommitLoop()
@@ -299,7 +300,7 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 	if helpers.IsZero(signature) {
 		return &DatabaseHeader{
 			root:          pager.NULL_PAGE,
-			version:       1,
+			version:       INITIAL_DB_VERSION,
 			pagesCount:    1, // Reserve page for header
 			transactionID: &atomic.Uint64{},
 		}, nil
@@ -336,18 +337,48 @@ func (db *Database) serializeHeader(header *DatabaseHeader) []byte {
 	return headerBlock
 }
 
+func (db *Database) openWAL() error {
+	if db.firstTimeInitialization() {
+		return db.initWAL()
+	} else {
+		return db.recoverFromWAL()
+	}
+}
+
+func (db *Database) initWAL() error {
+	db.wal.appendVersionUpdate(db.header.version)
+
+	if err := db.wal.sync(); err != nil {
+		return fmt.Errorf("Database: failed to flush WAL after setup: %w", err)
+	}
+
+	return nil
+}
+
 func (db *Database) recoverFromWAL() error {
-	latestSavedVersion, err := db.wal.latestUpdatedVersion()
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	events, err := db.wal.eventsSince(db.header.version)
+
 	if err != nil {
 		return fmt.Errorf("Database: failed to get latest database version from WAL: %w", err)
 	}
 
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	manager := newTableManager(db.header.root, pager.NewPageAllocator(db.storage, db.header.pagesCount, db.config.PageSize))
 
-	if latestSavedVersion == db.header.version {
-		return nil
+	if err := manager.applyChangeEvents(events); err != nil {
+		return fmt.Errorf("Database: failed to apply events from WAL: %w", err)
 	}
 
+	manager.writeTables()
+
+	db.storage.UpdateSegments(manager.allocator.Changes())
+	db.header.root = manager.root()
+
 	return nil
+}
+
+func (db *Database) firstTimeInitialization() bool {
+	return db.header.version == INITIAL_DB_VERSION && db.wal.empty()
 }

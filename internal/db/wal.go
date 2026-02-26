@@ -17,6 +17,7 @@ import (
 )
 
 const SEGMENT_NAME_FORMAT = "segment_%010d.wal"
+const INITIAL_SEGMENT_ID SegmentID = 1
 
 type SegmentID uint64
 
@@ -47,18 +48,23 @@ func newWAL(config DatabaseConfig) (*WAL, error) {
 	}
 
 	var err error
+	var segmentFound bool
 
-	if wal.segmentID, err = wal.findSegment(wal.directory); err != nil {
+	if wal.segmentID, segmentFound, err = wal.latestSegmentID(wal.directory); err != nil { // We will reuse the latest active segment if it exists
 		return nil, fmt.Errorf("WAL: failed to find existing segment: %w", err)
 	}
 
-	if wal.segmentID == 0 {
-		if wal.segmentID, err = wal.findSegment(wal.archiveDirectory); err != nil {
+	if !segmentFound { // If there is no existing active segment, check for the latest archived
+		if wal.segmentID, segmentFound, err = wal.latestSegmentID(wal.archiveDirectory); err != nil {
 			return nil, fmt.Errorf("WAL: failed to find existing segment in archive directory: %w", err)
+		}
+
+		if segmentFound {
+			wal.segmentID++ // Start with a new segment ID as the latest archived segment is considered full and should not be reused
 		}
 	}
 
-	if wal.segment, wal.segmentCapacity, err = wal.openSegmentOrCreate(wal.segmentID, wal.directory); err != nil {
+	if wal.segment, wal.segmentCapacity, err = wal.openSegment(wal.segmentID, wal.directory); err != nil {
 		return nil, fmt.Errorf("WAL: failed to open existing segment file: %w", err)
 	}
 
@@ -93,42 +99,46 @@ func (wal *WAL) appendFreePages(version DatabaseVersion, pages []pager.PagePoint
 	wal.appendEvent(events.NewFreePages(uint64(version), pages))
 }
 
-func (wal *WAL) changesSince(version DatabaseVersion) ([]TableEvent, error) {
-	wal.mu.Lock()
-	defer wal.mu.Unlock()
+func (wal *WAL) eventsSince(version DatabaseVersion) ([]TableEvent, error) {
+	wal.mu.Lock()         // Lock the WAL to prevent concurrent archiving current segment and closing files while reading changes.
+	defer wal.mu.Unlock() // This method is called during db initialization, so no need to worry about performance implications of locking here.
 
 	segment := wal.segment
 	segmentID := wal.segmentID
 
 	changes := [][]TableEvent{}
-	shouldScanNextSegment := true
+	changesFound := false
 
-	for shouldScanNextSegment {
+	for {
 		segmentChanges := []TableEvent{}
 
 		for event := range wal.scanSegment(segment) {
 			segmentChanges = append(segmentChanges, event)
 
 			if versionEvent, ok := event.(*events.UpdateDBVersion); ok && versionEvent.Version == uint64(version) {
-				shouldScanNextSegment = false
+				changesFound = true
 				segmentChanges = nil // Clear changes collected so far as they are from a previous version
 			}
 		}
 
-		if shouldScanNextSegment {
-			if segmentID == 0 {
-				break
-			}
-			nextSegment, _, err := wal.openSegmentOrCreate(segmentID-1, wal.archiveDirectory)
-
-			if err != nil {
-				return nil, fmt.Errorf("WAL: failed to open previous segment file: %w", err)
-			}
-
-			segmentID--
-			segment = nextSegment
-			changes = append(changes, segmentChanges)
+		if changesFound || segmentID == INITIAL_SEGMENT_ID { // If changes for the requested version are found or we have reached the initial segment, stop scanning further
+			break
 		}
+
+		nextSegment, _, err := wal.openSegment(segmentID-1, wal.archiveDirectory)
+		if err != nil {
+			return nil, fmt.Errorf("WAL: failed to open previous segment file: %w", err)
+		}
+
+		defer nextSegment.Close()
+
+		segment = nextSegment
+		segmentID -= 1
+		changes = append(changes, segmentChanges)
+	}
+
+	if !changesFound {
+		return nil, fmt.Errorf("WAL: no changes found for version %d", version)
 	}
 
 	slices.Reverse(changes)
@@ -164,6 +174,13 @@ func (wal *WAL) sync() error {
 	}
 
 	return nil
+}
+
+func (wal *WAL) empty() bool {
+	wal.mu.Lock()
+	defer wal.mu.Unlock()
+
+	return wal.segmentID == INITIAL_SEGMENT_ID && wal.segmentCapacity == 0
 }
 
 func (wal *WAL) decodeEvent(event TableEvent) []byte {
@@ -206,26 +223,26 @@ func (wal *WAL) encodeEvent(row []byte) (TableEvent, int, error) {
 	return event, int(size) + 8, nil
 }
 
-func (WAL *WAL) findSegment(directory string) (SegmentID, error) {
-	segmentID := SegmentID(0)
+func (wal *WAL) latestSegmentID(directory string) (SegmentID, bool, error) {
+	segmentID := INITIAL_SEGMENT_ID
 
 	entries, err := os.ReadDir(directory)
 	if err != nil {
-		return segmentID, fmt.Errorf("WAL: failed to read directory: %w", err)
+		return segmentID, false, fmt.Errorf("WAL: failed to read directory: %w", err)
 	}
 
 	for idx := len(entries) - 1; idx >= 0; idx-- {
 		entry := entries[idx]
 
 		if parsed, _ := fmt.Sscanf(entry.Name(), SEGMENT_NAME_FORMAT, &segmentID); parsed == 1 {
-			break
+			return segmentID, true, nil
 		}
 	}
 
-	return segmentID, nil
+	return segmentID, false, nil
 }
 
-func (wal *WAL) openSegmentOrCreate(segmentID SegmentID, directory string) (segment *os.File, capacity int64, err error) {
+func (wal *WAL) openSegment(segmentID SegmentID, directory string) (segment *os.File, capacity int64, err error) {
 	defer func() {
 		if err != nil && segment != nil {
 			segment.Close()
@@ -245,7 +262,7 @@ func (wal *WAL) archiveSegment() error {
 	archivedSegmentID := wal.segmentID
 	newSegmentID := wal.segmentID + 1
 
-	segment, capacity, err := wal.openSegmentOrCreate(newSegmentID, wal.directory)
+	segment, capacity, err := wal.openSegment(newSegmentID, wal.directory)
 
 	if err != nil {
 		return fmt.Errorf("WAL: failed to archive active segment: %w", err)
