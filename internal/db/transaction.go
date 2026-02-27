@@ -47,10 +47,9 @@ func (tx *Transaction) Commit() (err error) {
 	defer func() {
 		if panic := recover(); panic != nil {
 			err = fmt.Errorf("Transaction: panic during commit: %v", panic)
-		}
 
-		// In any case we reset transaction changes once it is finished in any state
-		tx.Rollback()
+			tx.Rollback()
+		}
 	}()
 
 	if !tx.setCommitting() {

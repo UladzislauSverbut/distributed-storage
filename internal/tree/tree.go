@@ -139,13 +139,22 @@ func (tree *Tree) setKeyValue(node *Node, key []byte, value []byte) (*Node, []by
 	switch node.getType() {
 	case NODE_LEAF:
 		{
-			storedKeyAtSamePosition := node.getKey(keyPosition)
-
-			if bytes.Equal(key, storedKeyAtSamePosition) {
-				return tree.updateLeafKeyValue(node, keyPosition, key, value), node.getValue(keyPosition)
-			} else {
-				return tree.insertLeafKeyValue(node, keyPosition, key, value), nil
+			if node.getStoredKeysNumber() == 0 { // If node is empty we should just append key-value pair
+				return tree.appendLeafKeyValueFirst(node, key, value), nil
 			}
+
+			comparisonResult := bytes.Compare(key, node.getKey(keyPosition))
+
+			if comparisonResult == 0 { // If keys are equal we should replace value
+				return tree.updateLeafKeyValue(node, keyPosition, key, value), node.getValue(keyPosition)
+			}
+
+			if comparisonResult < 0 { // If key is less than less stored key we should insert key-value pair before it
+				return tree.prependLeafKeyValueFirst(node, key, value), nil
+			}
+
+			// By default we should insert key-value pair after the stored key
+			return tree.insertLeafKeyValue(node, keyPosition, key, value), nil
 		}
 	case NODE_PARENT:
 		{
@@ -190,13 +199,28 @@ func (tree *Tree) insertLeafKeyValue(node *Node, position NodeKeyPosition, key [
 	newNode := &Node{data: make([]byte, 2*tree.config.PageSize)}
 	newNode.setHeader(NODE_LEAF, node.getStoredKeysNumber()+1)
 
-	if node.getStoredKeysNumber() > 0 {
-		newNode.copy(node, 0, 0, position+1)
-		newNode.appendKeyValue(key, value)
-		newNode.copy(node, position+1, position+2, node.getStoredKeysNumber()-(position+1))
-	} else {
-		newNode.appendKeyValue(key, value)
-	}
+	newNode.copy(node, 0, 0, position+1)
+	newNode.appendKeyValue(key, value)
+	newNode.copy(node, position+1, position+2, node.getStoredKeysNumber()-(position+1))
+
+	return newNode
+}
+
+func (tree *Tree) appendLeafKeyValueFirst(node *Node, key []byte, value []byte) *Node {
+	newNode := &Node{data: make([]byte, 2*tree.config.PageSize)}
+	newNode.setHeader(NODE_LEAF, node.getStoredKeysNumber()+1)
+
+	newNode.appendKeyValue(key, value)
+
+	return newNode
+}
+
+func (tree *Tree) prependLeafKeyValueFirst(node *Node, key []byte, value []byte) *Node {
+	newNode := &Node{data: make([]byte, 2*tree.config.PageSize)}
+	newNode.setHeader(NODE_LEAF, node.getStoredKeysNumber()+1)
+
+	newNode.appendKeyValue(key, value)
+	newNode.copy(node, 0, 1, node.getStoredKeysNumber())
 
 	return newNode
 }
@@ -348,16 +372,13 @@ func (tree *Tree) mergeNodes(first *Node, second *Node) *Node {
 
 func (tree *Tree) getLessOrEqualKeyPosition(node *Node, key []byte) NodeKeyPosition {
 	storedKeysNumber := node.getStoredKeysNumber()
-	// We find the position of last key that is less or equal than passed key.
-	// By default sequence number is 0 because we visited this node from the parent that contains the same key
-	// thus first stored key is always less or equal to passed
 	position := NodeKeyPosition(0)
 
-	for keyPosition := NodeKeyPosition(1); keyPosition < storedKeysNumber; keyPosition++ {
-		storedKey := node.getKey(keyPosition)
+	for nextPosition := NodeKeyPosition(1); nextPosition < storedKeysNumber; nextPosition++ {
+		storedKey := node.getKey(nextPosition)
 
 		if bytes.Compare(key, storedKey) >= 0 {
-			position = keyPosition
+			position = nextPosition
 		} else {
 			break
 		}

@@ -86,8 +86,8 @@ func NewDatabase(config DatabaseConfig) (*Database, error) {
 		return nil, fmt.Errorf("Database: failed to initialize WAL: %w", err)
 	}
 
-	if err = db.openWAL(); err != nil {
-		return nil, fmt.Errorf("Database: failed to initialize or recover WAL: %w", err)
+	if err = db.init(); err != nil {
+		return nil, fmt.Errorf("Database: failed to initialize database: %w", err)
 	}
 
 	go db.runCommitLoop()
@@ -337,8 +337,8 @@ func (db *Database) serializeHeader(header *DatabaseHeader) []byte {
 	return headerBlock
 }
 
-func (db *Database) openWAL() error {
-	if db.firstTimeInitialization() {
+func (db *Database) init() error {
+	if db.empty() {
 		return db.initWAL()
 	} else {
 		return db.recoverFromWAL()
@@ -374,11 +374,13 @@ func (db *Database) recoverFromWAL() error {
 	manager.writeTables()
 
 	db.storage.UpdateSegments(manager.allocator.Changes())
+	db.header.pagesCount = manager.allocator.TotalPages()
 	db.header.root = manager.root()
+	db.storage.Flush()
 
 	return nil
 }
 
-func (db *Database) firstTimeInitialization() bool {
+func (db *Database) empty() bool {
 	return db.header.version == INITIAL_DB_VERSION && db.wal.empty()
 }
