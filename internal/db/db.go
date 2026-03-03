@@ -195,9 +195,10 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	}
 
 	db.wal.appendTransactions(approvedTransactions)
+	db.wal.appendVersionUpdate(db.header.version + 1)
+
 	db.wal.appendFreePages(latestUnreachableVersion, reusablePages) // These pages can be reused because they are not used by any active transaction (e.g. they were allocated and released in the same version)
 	db.wal.appendFreePages(db.header.version, releasedPages)        // These pages will be ready to safely reused only since next db version since they can be still used by active transactions in the current version
-	db.wal.appendVersionUpdate(db.header.version + 1)
 
 	if err := db.wal.sync(); err != nil {
 		db.rejectTransactions(transactions, fmt.Errorf("Database: WAL flush failed: %w", err))
