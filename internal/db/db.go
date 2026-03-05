@@ -361,6 +361,7 @@ func (db *Database) recoverFromWAL() error {
 	defer db.mu.Unlock()
 
 	events, err := db.wal.eventsSince(db.header.version)
+	freePages := events[0]
 
 	if err != nil {
 		return fmt.Errorf("Database: failed to get latest database version from WAL: %w", err)
