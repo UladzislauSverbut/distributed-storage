@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"distributed-storage/internal/events"
 	"distributed-storage/internal/helpers"
 	"distributed-storage/internal/pager"
 	"distributed-storage/internal/store"
@@ -35,7 +36,8 @@ type DatabaseHeader struct {
 }
 
 type Database struct {
-	header *DatabaseHeader
+	header           *DatabaseHeader
+	committedVersion DatabaseVersion
 
 	wal     *WAL
 	config  DatabaseConfig
@@ -360,16 +362,24 @@ func (db *Database) recoverFromWAL() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	events, err := db.wal.eventsSince(db.header.version)
-	freePages := events[0]
+	restoredEvents, err := db.wal.eventsSince(db.header.version)
+	freePages := []pager.PagePointer{}
+
+	for _, event := range restoredEvents { // Free pages always stored in WAL at the beginning of new DB version
+		if event, ok := event.(*events.FreePages); ok {
+			freePages = append(freePages, event.Pages...)
+		} else {
+			break
+		}
+	}
 
 	if err != nil {
 		return fmt.Errorf("Database: failed to get latest database version from WAL: %w", err)
 	}
 
-	manager := newTableManager(db.header.root, pager.NewPageAllocator(db.storage, db.header.pagesCount, db.config.PageSize))
+	manager := newTableManager(db.header.root, pager.NewPageAllocator(db.storage, db.header.pagesCount, db.config.PageSize, freePages...))
 
-	if err := manager.applyChangeEvents(events); err != nil {
+	if err := manager.applyChangeEvents(restoredEvents); err != nil {
 		return fmt.Errorf("Database: failed to apply events from WAL: %w", err)
 	}
 
