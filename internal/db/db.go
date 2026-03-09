@@ -23,8 +23,8 @@ const NUMBER_OF_PARALLEL_TRANSACTIONS = 1024 // Max number of parallel transacti
 const COMMIT_BATCH_SIZE = 256                // Number of transactions to commit in a single batch
 
 const TRANSACTION_TIMEOUT = 30 * time.Minute
-const COMMIT_INTERVAL = 10 * time.Millisecond
-const SYNC_INTERVAL = 1 * time.Second
+const COMMIT_INTERVAL = 1 * time.Millisecond
+const SYNC_INTERVAL = 100 * time.Millisecond
 
 type DatabaseVersion uint64
 
@@ -36,8 +36,8 @@ type DatabaseHeader struct {
 }
 
 type Database struct {
-	header           *DatabaseHeader
-	committedVersion DatabaseVersion
+	header        *DatabaseHeader
+	syncedVersion DatabaseVersion
 
 	wal     *WAL
 	config  DatabaseConfig
@@ -149,9 +149,15 @@ func (db *Database) runSyncLoop() {
 	for range ticker.C {
 		ticker.Stop()
 
+		db.mu.Lock()
+
 		if err := db.storage.Flush(); err != nil {
 			fmt.Printf("Database: failed to flush storage: %s\n", err)
+		} else {
+			db.syncedVersion = db.header.version
 		}
+
+		db.mu.Unlock()
 
 		ticker.Reset(SYNC_INTERVAL)
 	}
@@ -283,12 +289,12 @@ func (db *Database) latestUnreachableVersion() DatabaseVersion {
 	for {
 		version, transactions, ok := db.transactions.PeekMin()
 		if !ok {
-			return db.header.version - 1
+			return db.syncedVersion
 		}
 
 		for _, transaction := range transactions {
 			if transaction.IsActive() {
-				return version - 1
+				return min(version-1, db.syncedVersion)
 			}
 		}
 
@@ -341,6 +347,7 @@ func (db *Database) serializeHeader(header *DatabaseHeader) []byte {
 }
 
 func (db *Database) init() error {
+
 	if db.empty() {
 		return db.initWAL()
 	} else {
@@ -355,6 +362,8 @@ func (db *Database) initWAL() error {
 		return fmt.Errorf("Database: failed to flush WAL after setup: %w", err)
 	}
 
+	db.syncedVersion = db.header.version
+
 	return nil
 }
 
@@ -363,12 +372,20 @@ func (db *Database) recoverFromWAL() error {
 	defer db.mu.Unlock()
 
 	restoredEvents, err := db.wal.eventsSince(db.header.version)
+	restoredVersion := db.header.version
 	freePages := []pager.PagePointer{}
 
-	for _, event := range restoredEvents { // Free pages always stored in WAL at the beginning of new DB version
+	for _, event := range restoredEvents { // FreePages events stored in WAL at the beginning of the events list because they are written to WAL UpdateDBVersion event
 		if event, ok := event.(*events.FreePages); ok {
 			freePages = append(freePages, event.Pages...)
 		} else {
+			break
+		}
+	}
+
+	for evenIdx := len(restoredEvents) - 1; evenIdx >= 0; evenIdx-- { // UpdateDBVersion event always stored in WAL at the end of the events list (before FreePages events)
+		if event, ok := restoredEvents[evenIdx].(*events.UpdateDBVersion); ok {
+			restoredVersion = DatabaseVersion(event.Version)
 			break
 		}
 	}
@@ -383,12 +400,20 @@ func (db *Database) recoverFromWAL() error {
 		return fmt.Errorf("Database: failed to apply events from WAL: %w", err)
 	}
 
-	manager.writeTables()
+	if err := manager.writeTables(); err != nil {
+		return fmt.Errorf("Database: failed to write restored tables from WAL: %w", err)
+	}
 
 	db.storage.UpdateSegments(manager.allocator.Changes())
 	db.header.pagesCount = manager.allocator.TotalPages()
 	db.header.root = manager.root()
-	db.storage.Flush()
+	db.header.version = restoredVersion
+
+	if err := db.storage.Flush(); err != nil {
+		return fmt.Errorf("Database: failed to flush restored tables from WAL: %w", err)
+	}
+
+	db.syncedVersion = db.header.version
 
 	return nil
 }
