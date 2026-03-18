@@ -383,8 +383,8 @@ func (db *Database) recoverFromWAL() error {
 		}
 	}
 
-	for evenIdx := len(restoredEvents) - 1; evenIdx >= 0; evenIdx-- { // UpdateDBVersion event always stored in WAL at the end of the events list (before FreePages events)
-		if event, ok := restoredEvents[evenIdx].(*events.UpdateDBVersion); ok {
+	for eventIdx := len(restoredEvents) - 1; eventIdx >= 0; eventIdx-- { // UpdateDBVersion event always stored in WAL at the end of the events list (before FreePages events)
+		if event, ok := restoredEvents[eventIdx].(*events.UpdateDBVersion); ok {
 			restoredVersion = DatabaseVersion(event.Version)
 			break
 		}
@@ -399,7 +399,6 @@ func (db *Database) recoverFromWAL() error {
 	if err := manager.applyChangeEvents(restoredEvents); err != nil {
 		return fmt.Errorf("Database: failed to apply events from WAL: %w", err)
 	}
-
 	if err := manager.writeTables(); err != nil {
 		return fmt.Errorf("Database: failed to write restored tables from WAL: %w", err)
 	}
