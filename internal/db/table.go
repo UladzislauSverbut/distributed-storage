@@ -243,10 +243,11 @@ func (table *Table) createSecondaryIndexes(record *vals.Object) error {
 	for indexNumber := range table.schema.SecondaryIndexes {
 
 		if secondaryIndex := table.getSecondaryIndex(record, indexNumber); secondaryIndex != nil {
-
 			if _, err := table.kv.Set(&kv.SetRequest{Key: secondaryIndex}); err != nil {
 				return err
 			}
+
+			table.changeEvents = append(table.changeEvents, events.NewInsertEntry(table.schema.Name, secondaryIndex, nil))
 		}
 	}
 
@@ -263,19 +264,20 @@ func (table *Table) updateSecondaryIndexes(record *vals.Object, oldRecord *vals.
 		secondaryIndex := table.getSecondaryIndex(record, indexNumber)
 		oldSecondaryIndex := table.getSecondaryIndex(oldRecord, indexNumber)
 
-		if slices.Compare(secondaryIndex, oldSecondaryIndex) != 0 {
-			if oldSecondaryIndex != nil {
-				if _, err := table.kv.Delete(&kv.DeleteRequest{Key: oldSecondaryIndex}); err != nil {
-					return err
-				}
+		if oldSecondaryIndex != nil && slices.Compare(secondaryIndex, oldSecondaryIndex) != 0 {
+			if _, err := table.kv.Delete(&kv.DeleteRequest{Key: oldSecondaryIndex}); err != nil {
+				return err
 			}
 
+			table.changeEvents = append(table.changeEvents, events.NewDeleteEntry(table.schema.Name, oldSecondaryIndex, nil))
 		}
 
-		if primaryIndexChanged && secondaryIndex != nil {
+		if secondaryIndex != nil && primaryIndexChanged {
 			if _, err := table.kv.Set(&kv.SetRequest{Key: secondaryIndex}); err != nil {
 				return err
 			}
+
+			table.changeEvents = append(table.changeEvents, events.NewInsertEntry(table.schema.Name, secondaryIndex, nil))
 		}
 	}
 
