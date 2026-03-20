@@ -372,10 +372,13 @@ func (db *Database) recoverFromWAL() error {
 	defer db.mu.Unlock()
 
 	restoredEvents, err := db.wal.eventsSince(db.header.version)
-	restoredVersion := db.header.version
+	restoredVersion := DatabaseVersion(0)
+	restoredTransactionID := TransactionID(0)
+
 	freePages := []pager.PagePointer{}
 
-	for _, event := range restoredEvents { // FreePages events stored in WAL at the beginning of the events list because they are written to WAL UpdateDBVersion event
+	// FreePages events stored in WAL at the beginning of the events list because they are written to WAL UpdateDBVersion event
+	for _, event := range restoredEvents {
 		if event, ok := event.(*events.FreePages); ok {
 			freePages = append(freePages, event.Pages...)
 		} else {
@@ -383,9 +386,13 @@ func (db *Database) recoverFromWAL() error {
 		}
 	}
 
-	for eventIdx := len(restoredEvents) - 1; eventIdx >= 0; eventIdx-- { // UpdateDBVersion event always stored in WAL at the end of the events list (before FreePages events)
+	// After commit at the end of WAL we have events in the following order: Table changes -> CommitTransaction -> UpdateDBVersion
+	// We need to iterate over events in reverse order to get latest database version and transaction ID
+	for eventIdx := len(restoredEvents) - 1; eventIdx >= 0; eventIdx-- {
 		if event, ok := restoredEvents[eventIdx].(*events.UpdateDBVersion); ok {
 			restoredVersion = DatabaseVersion(event.Version)
+		} else if event, ok := restoredEvents[eventIdx].(*events.CommitTransaction); ok {
+			restoredTransactionID = TransactionID(event.ID)
 			break
 		}
 	}
@@ -404,9 +411,11 @@ func (db *Database) recoverFromWAL() error {
 	}
 
 	db.storage.UpdateSegments(manager.allocator.Changes())
-	db.header.pagesCount = manager.allocator.TotalPages()
-	db.header.root = manager.root()
+
 	db.header.version = restoredVersion
+	db.header.root = manager.root()
+	db.header.pagesCount = manager.allocator.TotalPages()
+	db.header.transactionID.Store(uint64(restoredTransactionID))
 
 	if err := db.storage.Flush(); err != nil {
 		return fmt.Errorf("Database: failed to flush restored tables from WAL: %w", err)
