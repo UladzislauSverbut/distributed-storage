@@ -147,17 +147,16 @@ func (db *Database) runSyncLoop() {
 	ticker := time.NewTicker(SYNC_INTERVAL)
 
 	for range ticker.C {
-		ticker.Stop()
-
 		db.mu.Lock()
+		defer db.mu.Unlock()
+
+		ticker.Stop()
 
 		if err := db.storage.Flush(); err != nil {
 			fmt.Printf("Database: failed to flush storage: %s\n", err)
 		} else {
 			db.syncedVersion = db.header.version
 		}
-
-		db.mu.Unlock()
 
 		ticker.Reset(SYNC_INTERVAL)
 	}
@@ -410,12 +409,12 @@ func (db *Database) recoverFromWAL() error {
 		return fmt.Errorf("Database: failed to write restored tables from WAL: %w", err)
 	}
 
-	db.storage.UpdateSegments(manager.allocator.Changes())
-
 	db.header.version = restoredVersion
 	db.header.root = manager.root()
 	db.header.pagesCount = manager.allocator.TotalPages()
 	db.header.transactionID.Store(uint64(restoredTransactionID))
+
+	db.storage.UpdateSegments(append(manager.allocator.Changes(), store.SegmentUpdate{Offset: 0, Data: db.serializeHeader(db.header)}))
 
 	if err := db.storage.Flush(); err != nil {
 		return fmt.Errorf("Database: failed to flush restored tables from WAL: %w", err)
