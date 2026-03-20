@@ -372,6 +372,10 @@ func (db *Database) recoverFromWAL() error {
 	defer db.mu.Unlock()
 
 	restoredEvents, err := db.wal.eventsSince(db.header.version)
+	if err != nil {
+		return fmt.Errorf("Database: failed to get latest database version from WAL: %w", err)
+	}
+
 	restoredVersion := DatabaseVersion(0)
 	restoredTransactionID := TransactionID(0)
 
@@ -395,10 +399,6 @@ func (db *Database) recoverFromWAL() error {
 			restoredTransactionID = TransactionID(event.ID)
 			break
 		}
-	}
-
-	if err != nil {
-		return fmt.Errorf("Database: failed to get latest database version from WAL: %w", err)
 	}
 
 	manager := newTableManager(db.header.root, pager.NewPageAllocator(db.storage, db.header.pagesCount, db.config.PageSize, freePages...))
