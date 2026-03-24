@@ -15,7 +15,6 @@ import (
 )
 
 const DB_STORAGE_SIGNATURE = "DISTRIBUTED_DB_STORAGE" // Signature to identify and validate database storage file
-const HEADER_SIZE = len(DB_STORAGE_SIGNATURE) + 32
 const INITIAL_DB_VERSION DatabaseVersion = 1
 
 // Bytes
@@ -165,8 +164,9 @@ func (db *Database) runSyncLoop() {
 func (db *Database) commitBatch(transactions []TransactionCommit) {
 	latestUnreachableVersion := db.latestUnreachableVersion()
 
-	allocator := pager.NewPageAllocator(db.storage, db.header.pagesCount, db.config.PageSize, db.collectReleasedPages(latestUnreachableVersion)...)
-	manager := newTableManager(db.header.root, allocator)
+	manager := newTableManager(db.header.root,
+		pager.NewPageAllocator(db.storage, db.header.pagesCount, db.config.PageSize, db.collectReleasedPages(latestUnreachableVersion)...),
+	)
 
 	abortedTransactions := make([]TransactionCommit, 0)
 	approvedTransactions := make([]TransactionCommit, 0)
@@ -179,25 +179,18 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 		}
 	}
 
-	if err := manager.writeTables(); err != nil {
-		db.rejectTransactions(transactions, fmt.Errorf("Database: failed to write tables to to storage: %w", err))
-		return
-	}
-
-	releasedPages := allocator.ReleasedPages()
-	reusablePages := allocator.ReusablePages()
+	releasedPages := manager.releasedPages()
+	reusablePages := manager.reusablePages()
 
 	newHeader := &DatabaseHeader{
 		root:          manager.root(),
 		version:       db.header.version + 1,
-		pagesCount:    allocator.TotalPages(),
+		pagesCount:    manager.totalPages(),
 		transactionID: db.header.transactionID,
 	}
 
-	changes := append(allocator.Changes(), store.SegmentUpdate{Offset: 0, Data: db.serializeHeader(newHeader)})
-
-	if err := db.storage.UpdateSegments(changes); err != nil {
-		db.rejectTransactions(transactions, fmt.Errorf("Database: failed to update storage segments: %w", err))
+	if err := manager.commit(db.serializeHeader(newHeader)); err != nil {
+		db.rejectTransactions(transactions, fmt.Errorf("Database: failed to commit changes: %w", err))
 		return
 	}
 
@@ -307,7 +300,7 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 
 	if helpers.IsZero(signature) {
 		return &DatabaseHeader{
-			root:          pager.NULL_PAGE,
+			root:          pager.NullPage,
 			version:       INITIAL_DB_VERSION,
 			pagesCount:    1, // Reserve page for header
 			transactionID: &atomic.Uint64{},
@@ -405,16 +398,15 @@ func (db *Database) recoverFromWAL() error {
 	if err := manager.applyChangeEvents(restoredEvents); err != nil {
 		return fmt.Errorf("Database: failed to apply events from WAL: %w", err)
 	}
-	if err := manager.writeTables(); err != nil {
-		return fmt.Errorf("Database: failed to write restored tables from WAL: %w", err)
-	}
 
 	db.header.version = restoredVersion
 	db.header.root = manager.root()
-	db.header.pagesCount = manager.allocator.TotalPages()
+	db.header.pagesCount = manager.totalPages()
 	db.header.transactionID.Store(uint64(restoredTransactionID))
 
-	db.storage.UpdateSegments(append(manager.allocator.Changes(), store.SegmentUpdate{Offset: 0, Data: db.serializeHeader(db.header)}))
+	if err := manager.commit(db.serializeHeader(db.header)); err != nil {
+		return fmt.Errorf("Database: failed to commit restored state: %w", err)
+	}
 
 	if err := db.storage.Flush(); err != nil {
 		return fmt.Errorf("Database: failed to flush restored tables from WAL: %w", err)

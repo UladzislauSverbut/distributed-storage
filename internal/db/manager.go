@@ -10,6 +10,9 @@ import (
 	"fmt"
 )
 
+const HEADER_SIZE = len(DB_STORAGE_SIGNATURE) + 32
+const HEADER_PAGE = pager.PagePointer(0)
+
 var catalogSchema = TableSchema{
 	Name:         "@catalog",
 	ColumnNames:  []string{"name", "definition", "root", "size"},
@@ -129,7 +132,7 @@ func (manager *TableManager) changeEvents() []TableEvent {
 
 func (manager *TableManager) applyChangeEvents(changeEvents []TableEvent) (err error) {
 	// Save previous state to be able to rollback in case of error during apply
-	previousRootTable := manager.catalog.clone()
+	previousRootTable := manager.catalog.clone(manager.allocator)
 
 	defer func() {
 		if err != nil {
@@ -175,11 +178,28 @@ func (manager *TableManager) applyChangeEvents(changeEvents []TableEvent) (err e
 	return nil
 }
 
-func (manager *TableManager) writeTables() error {
+func (manager *TableManager) updateTables() error {
 	for name, table := range manager.loadedTables {
-		if err := manager.updateTable(name, table); err != nil {
-			return fmt.Errorf("Catalog: couldn't write table %s: %w", name, err)
+		// We only need to update tables that were changed
+		if len(table.changeEvents) > 0 {
+			if err := manager.updateTable(name, table); err != nil {
+				return fmt.Errorf("Catalog: couldn't write table %s: %w", name, err)
+			}
 		}
+	}
+
+	return nil
+}
+
+func (manager *TableManager) commit(headerData []byte) error {
+	if err := manager.updateTables(); err != nil {
+		return fmt.Errorf("TableManager: failed to write tables: %w", err)
+	}
+	if err := manager.allocator.UpdatePage(0, headerData); err != nil {
+		return fmt.Errorf("TableManager: failed to update header page: %w", err)
+	}
+	if err := manager.allocator.SaveChanges(); err != nil {
+		return fmt.Errorf("TableManager: failed to save changes: %w", err)
 	}
 
 	return nil
@@ -187,6 +207,18 @@ func (manager *TableManager) writeTables() error {
 
 func (manager *TableManager) root() pager.PagePointer {
 	return manager.catalog.Root()
+}
+
+func (manager *TableManager) totalPages() uint64 {
+	return manager.allocator.TotalPages()
+}
+
+func (manager *TableManager) releasedPages() []pager.PagePointer {
+	return manager.allocator.ReleasedPages()
+}
+
+func (manager *TableManager) reusablePages() []pager.PagePointer {
+	return manager.allocator.ReusablePages()
 }
 
 func (manager *TableManager) applyCreateTableEvent(event *events.CreateTable) error {
@@ -243,6 +275,7 @@ func (manager *TableManager) applyDeleteEntryEvent(event *events.DeleteEntry) er
 		return fmt.Errorf("DeleteEntry Apply: old value does not match expected value")
 	}
 
+	manager.dirtyTables[event.TableName] = struct{}{}
 	return nil
 }
 
@@ -263,6 +296,7 @@ func (manager *TableManager) applyUpdateEntryEvent(event *events.UpdateEntry) er
 		return fmt.Errorf("UpdateEntry Apply: old value does not match expected value")
 	}
 
+	manager.dirtyTables[event.TableName] = struct{}{}
 	return nil
 }
 
@@ -283,6 +317,7 @@ func (manager *TableManager) applyInsertEntryEvent(event *events.InsertEntry) er
 		return fmt.Errorf("InsertEntry Apply: expected insert but key already existed")
 	}
 
+	manager.dirtyTables[event.TableName] = struct{}{}
 	return nil
 }
 

@@ -3,6 +3,7 @@ package pager
 import (
 	"distributed-storage/internal/helpers"
 	"distributed-storage/internal/store"
+	"fmt"
 )
 
 const NULL_PAGE = PagePointer(0)
@@ -28,7 +29,7 @@ type PageAllocator struct {
 }
 
 func NewPageAllocator(storage store.Storage, pagesNumber uint64, pageSize int, availablePages ...PagePointer) *PageAllocator {
-	allocator := &PageAllocator{
+	return &PageAllocator{
 		storage: storage,
 		config: PageAllocatorConfig{
 			pageSize: pageSize,
@@ -41,8 +42,6 @@ func NewPageAllocator(storage store.Storage, pagesNumber uint64, pageSize int, a
 			pageUpdates:   map[PagePointer][]byte{},
 		},
 	}
-
-	return allocator
 }
 
 func (allocator *PageAllocator) Page(pointer PagePointer) []byte {
@@ -51,6 +50,15 @@ func (allocator *PageAllocator) Page(pointer PagePointer) []byte {
 	}
 
 	return allocator.storage.Segment(int(pointer)*allocator.config.pageSize, allocator.config.pageSize)
+}
+
+func (allocator *PageAllocator) UpdatePage(pointer PagePointer, data []byte) error {
+	if pointer > allocator.state.TotalPages {
+		return fmt.Errorf("PageAllocator: invalid page pointer %d (total pages: %d)", pointer, allocator.state.TotalPages)
+	}
+
+	allocator.state.pageUpdates[pointer] = data
+	return nil
 }
 
 func (allocator *PageAllocator) CreatePage(data []byte) PagePointer {
@@ -70,7 +78,7 @@ func (allocator *PageAllocator) CreatePage(data []byte) PagePointer {
 }
 
 func (allocator *PageAllocator) FreePage(pointer PagePointer) {
-	// If released page was in page pool than we can return it to reusable pages because nobody can reference this page
+	// If released page was in page pool we can return it to reusable pages because nobody can reference this page
 	if allocator.state.PagePool.Has(pointer) {
 		allocator.state.ReusablePages.Add(pointer)
 	} else {
@@ -92,16 +100,24 @@ func (allocator *PageAllocator) TotalPages() uint64 {
 	return allocator.state.TotalPages
 }
 
-func (allocator *PageAllocator) Changes() []store.SegmentUpdate {
+func (allocator *PageAllocator) SaveChanges() error {
 	updates := make([]store.SegmentUpdate, 0, len(allocator.state.pageUpdates))
 
 	for pointer, page := range allocator.state.pageUpdates {
+
 		updates = append(updates,
 			store.SegmentUpdate{
 				Offset: int(pointer) * allocator.config.pageSize,
-				Data:   page[0:allocator.config.pageSize]},
+				Data:   page[:allocator.config.pageSize],
+			},
 		)
 	}
 
-	return updates
+	if err := allocator.storage.UpdateSegments(updates); err != nil {
+		return fmt.Errorf("PageAllocator: failed to save changes: %w", err)
+	}
+
+	allocator.state.pageUpdates = map[PagePointer][]byte{}
+
+	return nil
 }

@@ -26,8 +26,6 @@ type Table struct {
 	kv           *kv.KeyValue
 	schema       *TableSchema
 	changeEvents []TableEvent
-
-	allocator *pager.PageAllocator
 }
 
 func newTable(root pager.PagePointer, allocator *pager.PageAllocator, schema *TableSchema) (*Table, error) {
@@ -36,8 +34,6 @@ func newTable(root pager.PagePointer, allocator *pager.PageAllocator, schema *Ta
 		kv:           kv,
 		schema:       schema,
 		changeEvents: []TableEvent{},
-
-		allocator: allocator,
 	}
 
 	if err := table.validateTableSchema(); err != nil {
@@ -229,13 +225,11 @@ func (table *Table) ChangeEvents() []TableEvent {
 	return table.changeEvents
 }
 
-func (table *Table) clone() *Table {
+func (table *Table) clone(allocator *pager.PageAllocator) *Table {
 	return &Table{
-		kv:           kv.NewKeyValue(table.kv.Root(), table.allocator),
+		kv:           kv.NewKeyValue(table.kv.Root(), allocator),
 		schema:       table.schema,
 		changeEvents: append([]TableEvent{}, table.changeEvents...),
-
-		allocator: table.allocator,
 	}
 }
 
