@@ -195,7 +195,7 @@ func (manager *TableManager) commit(headerData []byte) error {
 	if err := manager.updateTables(); err != nil {
 		return fmt.Errorf("TableManager: failed to write tables: %w", err)
 	}
-	if err := manager.allocator.UpdatePage(0, headerData); err != nil {
+	if err := manager.allocator.UpdatePage(HEADER_PAGE, headerData); err != nil {
 		return fmt.Errorf("TableManager: failed to update header page: %w", err)
 	}
 	if err := manager.allocator.SaveChanges(); err != nil {
@@ -275,7 +275,6 @@ func (manager *TableManager) applyDeleteEntryEvent(event *events.DeleteEntry) er
 		return fmt.Errorf("DeleteEntry Apply: old value does not match expected value")
 	}
 
-	manager.dirtyTables[event.TableName] = struct{}{}
 	return nil
 }
 
@@ -296,7 +295,6 @@ func (manager *TableManager) applyUpdateEntryEvent(event *events.UpdateEntry) er
 		return fmt.Errorf("UpdateEntry Apply: old value does not match expected value")
 	}
 
-	manager.dirtyTables[event.TableName] = struct{}{}
 	return nil
 }
 
@@ -317,7 +315,6 @@ func (manager *TableManager) applyInsertEntryEvent(event *events.InsertEntry) er
 		return fmt.Errorf("InsertEntry Apply: expected insert but key already existed")
 	}
 
-	manager.dirtyTables[event.TableName] = struct{}{}
 	return nil
 }
 

@@ -300,7 +300,7 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 
 	if helpers.IsZero(signature) {
 		return &DatabaseHeader{
-			root:          pager.NullPage,
+			root:          pager.NULL_PAGE,
 			version:       INITIAL_DB_VERSION,
 			pagesCount:    1, // Reserve page for header
 			transactionID: &atomic.Uint64{},

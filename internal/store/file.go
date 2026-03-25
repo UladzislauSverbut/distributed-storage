@@ -61,44 +61,6 @@ func NewFileStorage(filePath string, initialSize int) (*FileStorage, error) {
 	return storage, nil
 }
 
-func (storage *FileStorage) UpdateSegmentsAndFlush(updates []SegmentUpdate) error {
-	storage.mu.Lock()
-	defer storage.mu.Unlock()
-
-	for _, update := range updates {
-		expectedSize := update.Offset + len(update.Data)
-
-		if err := storage.ensureSize(expectedSize); err != nil {
-			return fmt.Errorf("FileStorage: couldn't increase size to update segment: %w", err)
-		}
-
-		helpers.WriteToSegments(storage.memory, update.Offset, update.Data)
-	}
-
-	if err := storage.file.Sync(); err != nil {
-		return fmt.Errorf("FileStorage: couldn't sync file during flushing updated segments: %w", err)
-	}
-	return nil
-}
-
-func (storage *FileStorage) AppendSegmentAndFlush(data []byte) error {
-	storage.mu.Lock()
-	defer storage.mu.Unlock()
-
-	expectedSize := storage.offset + len(data)
-	if err := storage.ensureSize(expectedSize); err != nil {
-		return fmt.Errorf("FileStorage: couldn't increase size to append segment: %w", err)
-	}
-
-	helpers.WriteToSegments(storage.memory, storage.offset, data)
-	storage.offset += len(data)
-
-	if err := storage.file.Sync(); err != nil {
-		return fmt.Errorf("FileStorage: couldn't sync file during appending segment: %w", err)
-	}
-	return nil
-}
-
 func (storage *FileStorage) Segment(offset int, size int) []byte {
 	storage.mu.RLock()
 	defer storage.mu.RUnlock()
@@ -123,23 +85,6 @@ func (storage *FileStorage) UpdateSegments(updates []SegmentUpdate) error {
 
 		helpers.WriteToSegments(storage.memory, update.Offset, update.Data)
 	}
-
-	return nil
-}
-
-func (storage *FileStorage) AppendSegment(data []byte) error {
-	storage.mu.Lock()
-	defer storage.mu.Unlock()
-
-	expectedSize := storage.offset + len(data)
-
-	if err := storage.ensureSize(expectedSize); err != nil {
-		return fmt.Errorf("FileStorage: couldn't increase size to append segment: %w", err)
-	}
-
-	helpers.WriteToSegments(storage.memory, storage.offset, data)
-
-	storage.offset += len(data)
 
 	return nil
 }
