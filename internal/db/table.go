@@ -28,8 +28,8 @@ type Table struct {
 	changeEvents []TableEvent
 }
 
-func newTable(root pager.PagePointer, allocator *pager.PageAllocator, schema *TableSchema) (*Table, error) {
-	kv := kv.NewKeyValue(root, allocator)
+func newTable(root pager.PagePointer, pager *pager.Pager, schema *TableSchema) (*Table, error) {
+	kv := kv.NewKeyValue(root, pager)
 	table := &Table{
 		kv:           kv,
 		schema:       schema,
@@ -223,14 +223,6 @@ func (table *Table) Schema() *TableSchema {
 
 func (table *Table) ChangeEvents() []TableEvent {
 	return table.changeEvents
-}
-
-func (table *Table) clone(allocator *pager.PageAllocator) *Table {
-	return &Table{
-		kv:           kv.NewKeyValue(table.kv.Root(), allocator),
-		schema:       table.schema,
-		changeEvents: append([]TableEvent{}, table.changeEvents...),
-	}
 }
 
 func (table *Table) createSecondaryIndexes(record *vals.Object) error {

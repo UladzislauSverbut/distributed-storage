@@ -12,14 +12,14 @@ var config = tree.TreeConfig{
 }
 
 type KeyValue struct {
-	tree      *tree.Tree
-	allocator *pager.PageAllocator
+	tree  *tree.Tree
+	pager *pager.Pager
 }
 
-func NewKeyValue(root pager.PagePointer, allocator *pager.PageAllocator) *KeyValue {
+func NewKeyValue(root pager.PagePointer, pager *pager.Pager) *KeyValue {
 	return &KeyValue{
-		tree:      tree.NewTree(root, allocator, config),
-		allocator: allocator,
+		tree:  tree.NewTree(root, pager, config),
+		pager: pager,
 	}
 }
 

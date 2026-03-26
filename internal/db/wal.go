@@ -148,7 +148,7 @@ func (wal *WAL) eventsSince(version DatabaseVersion) ([]TableEvent, error) {
 }
 
 func (wal *WAL) appendEvent(event TableEvent) {
-	wal.pendingLog = append(wal.pendingLog, wal.decodeEvent(event)...)
+	wal.pendingLog = append(wal.pendingLog, wal.encodeEvent(event)...)
 }
 
 func (wal *WAL) sync() error {
@@ -184,7 +184,7 @@ func (wal *WAL) empty() bool {
 	return wal.segmentID == INITIAL_SEGMENT_ID && wal.segmentCapacity == 0
 }
 
-func (wal *WAL) decodeEvent(event TableEvent) []byte {
+func (wal *WAL) encodeEvent(event TableEvent) []byte {
 	data := event.Serialize()
 	size := uint32(len(data))
 
@@ -198,7 +198,7 @@ func (wal *WAL) decodeEvent(event TableEvent) []byte {
 	return row
 }
 
-func (wal *WAL) encodeEvent(row []byte) (TableEvent, int, error) {
+func (wal *WAL) decodeEvent(row []byte) (TableEvent, int, error) {
 	if len(row) < 8 {
 		return nil, 0, nil
 	}
@@ -318,7 +318,7 @@ func (wal *WAL) scanSegment(segment *os.File) iter.Seq[TableEvent] {
 			accumulator = append(accumulator, chunk[:readBytes]...)
 
 			for len(accumulator) > 0 {
-				event, consumed, err := wal.encodeEvent(accumulator)
+				event, consumed, err := wal.decodeEvent(accumulator)
 
 				if err != nil {
 					fmt.Printf("WAL: failed to decode event: %v\n", err)

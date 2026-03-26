@@ -24,17 +24,17 @@ type TableManager struct {
 	catalog      *Table
 	loadedTables map[string]*Table
 
-	allocator *pager.PageAllocator
+	pager *pager.Pager
 }
 
-func newTableManager(root pager.PagePointer, allocator *pager.PageAllocator) *TableManager {
-	catalog, _ := newTable(root, allocator, &catalogSchema)
+func newTableManager(root pager.PagePointer, pager *pager.Pager) *TableManager {
+	catalog, _ := newTable(root, pager, &catalogSchema)
 
 	return &TableManager{
 		catalog:      catalog,
 		loadedTables: make(map[string]*Table),
 
-		allocator: allocator,
+		pager: pager,
 	}
 }
 
@@ -78,7 +78,7 @@ func (manager *TableManager) updateTable(name string, table *Table) error {
 }
 
 func (manager *TableManager) createTable(schema *TableSchema) (*Table, error) {
-	table, err := newTable(pager.NULL_PAGE, manager.allocator, schema)
+	table, err := newTable(pager.NULL_PAGE, manager.pager, schema)
 	if err != nil {
 		return nil, fmt.Errorf("Catalog: couldn't create table %s: %w", schema.Name, err)
 	}
@@ -131,13 +131,14 @@ func (manager *TableManager) changeEvents() []TableEvent {
 }
 
 func (manager *TableManager) applyChangeEvents(changeEvents []TableEvent) (err error) {
-	// Save previous state to be able to rollback in case of error during apply
-	previousRootTable := manager.catalog.clone(manager.allocator)
+	previousRoot := manager.catalog.Root()
+	snapshot := manager.pager.Snapshot()
 
 	defer func() {
 		if err != nil {
-			// If any error occurs during apply, rollback to the previous state of catalog
-			manager.catalog = previousRootTable
+			manager.pager.Restore(snapshot)
+			manager.catalog, _ = newTable(previousRoot, manager.pager, &catalogSchema) // In case of error we restore previous catalog state
+			manager.loadedTables = make(map[string]*Table)                             //In case of error we discard all cached tables
 		}
 	}()
 
@@ -195,10 +196,10 @@ func (manager *TableManager) commit(headerData []byte) error {
 	if err := manager.updateTables(); err != nil {
 		return fmt.Errorf("TableManager: failed to write tables: %w", err)
 	}
-	if err := manager.allocator.UpdatePage(HEADER_PAGE, headerData); err != nil {
+	if err := manager.pager.UpdatePage(HEADER_PAGE, headerData); err != nil {
 		return fmt.Errorf("TableManager: failed to update header page: %w", err)
 	}
-	if err := manager.allocator.SaveChanges(); err != nil {
+	if err := manager.pager.SaveChanges(); err != nil {
 		return fmt.Errorf("TableManager: failed to save changes: %w", err)
 	}
 
@@ -210,15 +211,15 @@ func (manager *TableManager) root() pager.PagePointer {
 }
 
 func (manager *TableManager) totalPages() uint64 {
-	return manager.allocator.TotalPages()
+	return manager.pager.TotalPages()
 }
 
 func (manager *TableManager) releasedPages() []pager.PagePointer {
-	return manager.allocator.ReleasedPages()
+	return manager.pager.ReleasedPages()
 }
 
 func (manager *TableManager) reusablePages() []pager.PagePointer {
-	return manager.allocator.ReusablePages()
+	return manager.pager.ReusablePages()
 }
 
 func (manager *TableManager) applyCreateTableEvent(event *events.CreateTable) error {
@@ -329,7 +330,7 @@ func (manager *TableManager) decodeTable(record *vals.Object) *Table {
 	schema := &TableSchema{}
 	json.Unmarshal([]byte(definition), schema)
 
-	table, _ := newTable(root, manager.allocator, schema)
+	table, _ := newTable(root, manager.pager, schema)
 	return table
 }
 

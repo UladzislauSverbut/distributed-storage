@@ -39,6 +39,7 @@ type Database struct {
 	syncedVersion DatabaseVersion
 
 	wal     *WAL
+	pager   *pager.Pager
 	config  DatabaseConfig
 	storage store.Storage
 
@@ -82,6 +83,8 @@ func NewDatabase(config DatabaseConfig) (*Database, error) {
 	if db.header, err = db.readHeader(); err != nil {
 		return nil, fmt.Errorf("Database: failed to read header: %w", err)
 	}
+
+	db.pager = pager.NewPager(db.storage, db.header.pagesCount, db.config.PageSize)
 
 	if db.wal, err = newWAL(config); err != nil {
 		return nil, fmt.Errorf("Database: failed to initialize WAL: %w", err)
@@ -165,7 +168,7 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	latestUnreachableVersion := db.latestUnreachableVersion()
 
 	manager := newTableManager(db.header.root,
-		pager.NewPageAllocator(db.storage, db.header.pagesCount, db.config.PageSize, db.collectReleasedPages(latestUnreachableVersion)...),
+		db.pager.Fork(db.header.pagesCount, db.collectReleasedPages(latestUnreachableVersion)...),
 	)
 
 	abortedTransactions := make([]TransactionCommit, 0)
@@ -242,7 +245,7 @@ func (db *Database) createTransaction(ctx context.Context) (*Transaction, error)
 	tx := &Transaction{
 		id:      TransactionID(header.transactionID.Add(1)),
 		version: header.version,
-		manager: newTableManager(header.root, pager.NewPageAllocator(db.storage, header.pagesCount, db.config.PageSize)),
+		manager: newTableManager(header.root, db.pager.Fork(header.pagesCount)),
 
 		commitQueue: db.commitQueue,
 		ctx:         ctx,
@@ -295,7 +298,7 @@ func (db *Database) latestUnreachableVersion() DatabaseVersion {
 }
 
 func (db *Database) readHeader() (*DatabaseHeader, error) {
-	headerBlock := db.storage.Segment(0, HEADER_SIZE)
+	headerBlock := db.pager.Page(HEADER_PAGE)
 	signature := headerBlock[0:len(DB_STORAGE_SIGNATURE)]
 
 	if helpers.IsZero(signature) {
@@ -393,7 +396,7 @@ func (db *Database) recoverFromWAL() error {
 		}
 	}
 
-	manager := newTableManager(db.header.root, pager.NewPageAllocator(db.storage, db.header.pagesCount, db.config.PageSize, freePages...))
+	manager := newTableManager(db.header.root, db.pager.Fork(db.header.pagesCount, freePages...))
 
 	if err := manager.applyChangeEvents(restoredEvents); err != nil {
 		return fmt.Errorf("Database: failed to apply events from WAL: %w", err)

@@ -12,16 +12,16 @@ type TreeConfig struct {
 	MaxValueSize int
 }
 type Tree struct {
-	root      pager.PagePointer
-	config    TreeConfig
-	allocator *pager.PageAllocator
+	root   pager.PagePointer
+	config TreeConfig
+	pager  *pager.Pager
 }
 
-func NewTree(root pager.PagePointer, allocator *pager.PageAllocator, config TreeConfig) *Tree {
+func NewTree(root pager.PagePointer, pager *pager.Pager, config TreeConfig) *Tree {
 	return &Tree{
-		root:      root,
-		allocator: allocator,
-		config:    config,
+		root:   root,
+		pager:  pager,
+		config: config,
 	}
 }
 
@@ -34,7 +34,7 @@ func (tree *Tree) Get(key []byte) ([]byte, error) {
 		return nil, nil
 	}
 
-	return tree.getKeyValue(&Node{data: tree.allocator.Page(tree.root)}, key), nil
+	return tree.getKeyValue(&Node{data: tree.pager.Page(tree.root)}, key), nil
 }
 
 func (tree *Tree) Set(key []byte, value []byte) ([]byte, error) {
@@ -52,12 +52,12 @@ func (tree *Tree) Set(key []byte, value []byte) ([]byte, error) {
 		rootNode.setHeader(NODE_LEAF, 1)
 		rootNode.appendKeyValue(key, value)
 
-		tree.root = tree.allocator.CreatePage(rootNode.data)
+		tree.root = tree.pager.CreatePage(rootNode.data)
 
 		return nil, nil
 	}
 
-	rootNode := &Node{data: tree.allocator.Page(tree.root)}
+	rootNode := &Node{data: tree.pager.Page(tree.root)}
 	rootNode, oldValue := tree.setKeyValue(rootNode, key, value)
 
 	if int(rootNode.size()) > tree.config.PageSize {
@@ -68,12 +68,12 @@ func (tree *Tree) Set(key []byte, value []byte) ([]byte, error) {
 
 		for _, child := range splitNodes {
 			firstStoredKey := child.getKey(NodeKeyPosition(0))
-			rootNode.appendPointer(firstStoredKey, tree.allocator.CreatePage(child.data))
+			rootNode.appendPointer(firstStoredKey, tree.pager.CreatePage(child.data))
 		}
 	}
 
-	tree.allocator.FreePage(tree.root)
-	tree.root = tree.allocator.CreatePage(rootNode.data)
+	tree.pager.FreePage(tree.root)
+	tree.root = tree.pager.CreatePage(rootNode.data)
 
 	return oldValue, nil
 }
@@ -87,20 +87,20 @@ func (tree *Tree) Delete(key []byte) ([]byte, error) {
 		return nil, nil
 	}
 
-	rootNode := &Node{data: tree.allocator.Page(tree.root)}
+	rootNode := &Node{data: tree.pager.Page(tree.root)}
 	updatedRootNode, oldValue := tree.deleteKeyValue(rootNode, key)
 
 	if rootNode == updatedRootNode {
 		return oldValue, nil
 	}
 
-	tree.allocator.FreePage(tree.root)
+	tree.pager.FreePage(tree.root)
 
 	if updatedRootNode.getType() == NODE_PARENT && updatedRootNode.getStoredKeysNumber() == 1 {
 		firstChild := updatedRootNode.getChildPointer(NodeKeyPosition(0))
 		tree.root = firstChild
 	} else {
-		tree.root = tree.allocator.CreatePage(updatedRootNode.data)
+		tree.root = tree.pager.CreatePage(updatedRootNode.data)
 	}
 
 	return oldValue, nil
@@ -125,7 +125,7 @@ func (tree *Tree) getKeyValue(node *Node, key []byte) []byte {
 		}
 	case NODE_PARENT:
 		{
-			return tree.getKeyValue(&Node{data: tree.allocator.Page(node.getChildPointer(keyPosition))}, key)
+			return tree.getKeyValue(&Node{data: tree.pager.Page(node.getChildPointer(keyPosition))}, key)
 		}
 	default:
 		{
@@ -244,9 +244,9 @@ func (tree *Tree) deleteLeafKeyValue(node *Node, key []byte) (*Node, []byte) {
 
 func (tree *Tree) setParentKeyValue(parent *Node, position NodeKeyPosition, key []byte, value []byte) (*Node, []byte) {
 	childPointer := parent.getChildPointer(position)
-	updatedChild, oldValue := tree.setKeyValue(&Node{data: tree.allocator.Page(childPointer)}, key, value)
+	updatedChild, oldValue := tree.setKeyValue(&Node{data: tree.pager.Page(childPointer)}, key, value)
 
-	tree.allocator.FreePage(childPointer)
+	tree.pager.FreePage(childPointer)
 
 	var newParentChildren []*Node
 
@@ -263,7 +263,7 @@ func (tree *Tree) deleteParentKeyValue(node *Node, key []byte) (*Node, []byte) {
 	keyPosition := tree.getLessOrEqualKeyPosition(node, key)
 	childPointer := node.getChildPointer(keyPosition)
 
-	child := &Node{data: tree.allocator.Page(childPointer)}
+	child := &Node{data: tree.pager.Page(childPointer)}
 
 	updatedChild, oldValue := tree.deleteKeyValue(child, key)
 
@@ -286,7 +286,7 @@ func (tree *Tree) replaceParentChildren(parent *Node, children []*Node, position
 
 	for _, child := range children {
 		firstChildStoredKey := child.getKey(NodeKeyPosition(0))
-		newNode.appendPointer(firstChildStoredKey, tree.allocator.CreatePage(child.data))
+		newNode.appendPointer(firstChildStoredKey, tree.pager.CreatePage(child.data))
 	}
 
 	newNode.copy(parent, position+quantity, position+uint16(len(children)), parent.getStoredKeysNumber()-(position+quantity))
@@ -295,17 +295,17 @@ func (tree *Tree) replaceParentChildren(parent *Node, children []*Node, position
 }
 
 func (tree *Tree) mergeParentChildren(node *Node, newChild *Node, position NodeKeyPosition) *Node {
-	defer tree.allocator.FreePage(node.getChildPointer(position))
+	defer tree.pager.FreePage(node.getChildPointer(position))
 
 	if int(newChild.size()) < tree.config.PageSize/4 {
 		if position > 0 {
 			leftChildPointer := node.getChildPointer(position - 1)
-			leftChild := &Node{data: tree.allocator.Page(leftChildPointer)}
+			leftChild := &Node{data: tree.pager.Page(leftChildPointer)}
 
 			if int(leftChild.size()+newChild.size()) < tree.config.PageSize-HEADER_SIZE {
 				updatedParent := tree.replaceParentChildren(node, []*Node{tree.mergeNodes(leftChild, newChild)}, position-1, 2)
 
-				tree.allocator.FreePage(leftChildPointer)
+				tree.pager.FreePage(leftChildPointer)
 
 				return updatedParent
 			}
@@ -313,12 +313,12 @@ func (tree *Tree) mergeParentChildren(node *Node, newChild *Node, position NodeK
 
 		if position < node.getStoredKeysNumber()-1 {
 			rightChildPointer := node.getChildPointer(position + 1)
-			rightChild := &Node{data: tree.allocator.Page(rightChildPointer)}
+			rightChild := &Node{data: tree.pager.Page(rightChildPointer)}
 
 			if int(rightChild.size()+newChild.size()) < tree.config.PageSize-HEADER_SIZE {
 				updatedParent := tree.replaceParentChildren(node, []*Node{tree.mergeNodes(newChild, rightChild)}, position, 2)
 
-				tree.allocator.FreePage(rightChildPointer)
+				tree.pager.FreePage(rightChildPointer)
 
 				return updatedParent
 			}
@@ -330,7 +330,7 @@ func (tree *Tree) mergeParentChildren(node *Node, newChild *Node, position NodeK
 func (tree *Tree) deleteParentChild(parent *Node, position NodeKeyPosition) *Node {
 	newNode := &Node{data: make([]byte, tree.config.PageSize)}
 
-	tree.allocator.FreePage(parent.getChildPointer(position))
+	tree.pager.FreePage(parent.getChildPointer(position))
 
 	newNode.setHeader(NODE_PARENT, parent.getStoredKeysNumber()-1)
 	newNode.copy(parent, 0, 0, position)
