@@ -340,21 +340,17 @@ func (tree *Tree) deleteParentChild(parent *Node, position NodeKeyPosition) *Nod
 }
 
 func (tree *Tree) splitNode(node *Node) []*Node {
-	storedKeysNumber := node.getStoredKeysNumber()
-	splitChildPosition := storedKeysNumber - 1
-
-	for int(node.size()-node.getKeyValueOffset(splitChildPosition-1)) <= tree.config.PageSize/2 && splitChildPosition > 1 {
-		splitChildPosition--
-	}
+	keysNumber := node.getStoredKeysNumber()
+	splitPosition := tree.getSplitPosition(node)
 
 	firstNode := &Node{data: make([]byte, tree.config.PageSize)}
 	secondNode := &Node{data: make([]byte, tree.config.PageSize)}
 
-	firstNode.setHeader(node.getType(), splitChildPosition)
-	secondNode.setHeader(node.getType(), storedKeysNumber-splitChildPosition)
+	firstNode.setHeader(node.getType(), splitPosition)
+	secondNode.setHeader(node.getType(), keysNumber-splitPosition)
 
-	firstNode.copy(node, 0, 0, splitChildPosition)
-	secondNode.copy(node, splitChildPosition, 0, storedKeysNumber-splitChildPosition)
+	firstNode.copy(node, 0, 0, splitPosition)
+	secondNode.copy(node, splitPosition, 0, keysNumber-splitPosition)
 
 	return []*Node{firstNode, secondNode}
 }
@@ -371,18 +367,33 @@ func (tree *Tree) mergeNodes(first *Node, second *Node) *Node {
 }
 
 func (tree *Tree) getLessOrEqualKeyPosition(node *Node, key []byte) NodeKeyPosition {
-	storedKeysNumber := node.getStoredKeysNumber()
-	position := NodeKeyPosition(0)
+	left, right := NodeKeyPosition(0), node.getStoredKeysNumber()-1
 
-	for nextPosition := NodeKeyPosition(1); nextPosition < storedKeysNumber; nextPosition++ {
-		storedKey := node.getKey(nextPosition)
-
-		if bytes.Compare(key, storedKey) >= 0 {
-			position = nextPosition
+	for left < right {
+		mid := left + (right-left)/2
+		if bytes.Compare(key, node.getKey(mid)) >= 0 {
+			left = mid + 1
 		} else {
-			break
+			right = mid - 1
 		}
 	}
 
-	return position
+	return left
+}
+
+func (tree *Tree) getSplitPosition(node *Node) NodeKeyPosition {
+	nodeSize := int(node.size())
+	halfPage := tree.config.PageSize / 2
+
+	left, right := NodeKeyPosition(0), node.getStoredKeysNumber()-1
+	for left < right {
+		mid := left + (right-left)/2
+		if nodeSize-int(node.getKeyValueOffset(mid-1)) > halfPage {
+			left = mid + 1
+		} else {
+			right = mid - 1
+		}
+	}
+
+	return left
 }
