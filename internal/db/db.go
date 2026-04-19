@@ -150,7 +150,6 @@ func (db *Database) runSyncLoop() {
 
 	for range ticker.C {
 		db.mu.Lock()
-		defer db.mu.Unlock()
 
 		ticker.Stop()
 
@@ -159,6 +158,8 @@ func (db *Database) runSyncLoop() {
 		} else {
 			db.syncedVersion = db.header.version
 		}
+
+		db.mu.Unlock()
 
 		ticker.Reset(SYNC_INTERVAL)
 	}
@@ -298,7 +299,7 @@ func (db *Database) latestUnreachableVersion() DatabaseVersion {
 }
 
 func (db *Database) readHeader() (*DatabaseHeader, error) {
-	headerBlock := db.pager.Page(HEADER_PAGE)
+	headerBlock := pager.NewPager(db.storage, 1, db.config.PageSize).Page(HEADER_PAGE)
 	signature := headerBlock[0:len(DB_STORAGE_SIGNATURE)]
 
 	if helpers.IsZero(signature) {

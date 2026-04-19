@@ -108,7 +108,7 @@ func (pager *Pager) SaveChanges() error {
 		updates = append(updates,
 			store.SegmentUpdate{
 				Offset: int(pointer) * pager.config.pageSize,
-				Data:   page[:pager.config.pageSize],
+				Data:   page[:min(len(page), pager.config.pageSize)],
 			},
 		)
 	}

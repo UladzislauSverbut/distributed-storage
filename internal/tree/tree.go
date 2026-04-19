@@ -370,9 +370,9 @@ func (tree *Tree) getLessOrEqualKeyPosition(node *Node, key []byte) NodeKeyPosit
 	left, right := NodeKeyPosition(0), node.getStoredKeysNumber()-1
 
 	for left < right {
-		mid := left + (right-left)/2
+		mid := left + (right-left+1)/2
 		if bytes.Compare(key, node.getKey(mid)) >= 0 {
-			left = mid + 1
+			left = mid
 		} else {
 			right = mid - 1
 		}
@@ -387,9 +387,9 @@ func (tree *Tree) getSplitPosition(node *Node) NodeKeyPosition {
 
 	left, right := NodeKeyPosition(0), node.getStoredKeysNumber()-1
 	for left < right {
-		mid := left + (right-left)/2
+		mid := left + (right-left+1)/2
 		if nodeSize-int(node.getKeyValueOffset(mid-1)) > halfPage {
-			left = mid + 1
+			left = mid
 		} else {
 			right = mid - 1
 		}
