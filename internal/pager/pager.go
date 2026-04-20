@@ -124,8 +124,9 @@ func (pager *Pager) SaveChanges() error {
 
 func (pager *Pager) Snapshot() PagerState {
 	pageUpdates := make(map[PagePointer][]byte, len(pager.state.pageUpdates))
-	for k, v := range pager.state.pageUpdates {
-		pageUpdates[k] = v
+
+	for pointer, page := range pager.state.pageUpdates {
+		pageUpdates[pointer] = page
 	}
 
 	return PagerState{

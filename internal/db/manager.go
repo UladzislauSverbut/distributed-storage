@@ -176,16 +176,14 @@ func (manager *TableManager) applyChangeEvents(changeEvents []TableEvent) (err e
 		}
 	}
 
-	return nil
+	return manager.updateTables()
 }
 
 func (manager *TableManager) updateTables() error {
+	// We only need to update tables that were changed
 	for name, table := range manager.loadedTables {
-		// We only need to update tables that were changed
-		if len(table.changeEvents) > 0 {
-			if err := manager.updateTable(name, table); err != nil {
-				return fmt.Errorf("Catalog: couldn't write table %s: %w", name, err)
-			}
+		if err := manager.updateTable(name, table); err != nil {
+			return fmt.Errorf("Catalog: couldn't write table %s: %w", name, err)
 		}
 	}
 
@@ -193,9 +191,6 @@ func (manager *TableManager) updateTables() error {
 }
 
 func (manager *TableManager) commit(headerData []byte) error {
-	if err := manager.updateTables(); err != nil {
-		return fmt.Errorf("TableManager: failed to write tables: %w", err)
-	}
 	if err := manager.pager.UpdatePage(HEADER_PAGE, headerData); err != nil {
 		return fmt.Errorf("TableManager: failed to update header page: %w", err)
 	}
