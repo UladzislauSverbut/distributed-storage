@@ -209,11 +209,11 @@ func (manager *TableManager) totalPages() uint64 {
 	return manager.pager.TotalPages()
 }
 
-func (manager *TableManager) releasedPages() []pager.PagePointer {
+func (manager *TableManager) releasedPages() pager.PageList {
 	return manager.pager.ReleasedPages()
 }
 
-func (manager *TableManager) reusablePages() []pager.PagePointer {
+func (manager *TableManager) reusablePages() pager.PageList {
 	return manager.pager.ReusablePages()
 }
 

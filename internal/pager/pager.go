@@ -1,7 +1,6 @@
 package pager
 
 import (
-	"distributed-storage/internal/helpers"
 	"distributed-storage/internal/store"
 	"fmt"
 )
@@ -15,11 +14,11 @@ type PagerConfig struct {
 }
 
 type PagerState struct {
-	TotalPages    uint64                   // Total number of pages in storage
-	PagePool      helpers.Set[PagePointer] // Total set of pages that are not reachable by others and could be reused
-	ReusablePages helpers.Set[PagePointer] // Set of pages that are prepared for reuse
-	ReleasedPages helpers.Set[PagePointer] // Set of pages that were released and cannot be overwritten due to immutability
-	pageUpdates   map[PagePointer][]byte   // Map of page updates that will be synced with storage
+	TotalPages     uint64                 // Total number of pages in storage
+	AvailablePages PageList               // List  of pages that are not reachable by others and could be mutated
+	ReusablePages  PageList               // List of pages that can be reused by others
+	ReleasedPages  PageList               // List of pages that were released and cannot be overwritten due to immutability
+	pageUpdates    map[PagePointer][]byte // Map of page updates that will be synced with storage
 }
 
 type Pager struct {
@@ -28,18 +27,23 @@ type Pager struct {
 	state   PagerState
 }
 
-func NewPager(storage store.Storage, pagesNumber uint64, pageSize int, availablePages ...PagePointer) *Pager {
+func NewPager(storage store.Storage, pagesNumber uint64, pageSize int, availablePages ...PageList) *Pager {
+	pages := NewPageList()
+	if len(availablePages) > 0 {
+		pages = availablePages[0]
+	}
+
 	return &Pager{
 		storage: storage,
 		config: PagerConfig{
 			pageSize: pageSize,
 		},
 		state: PagerState{
-			TotalPages:    pagesNumber,
-			PagePool:      helpers.NewSet(availablePages...),
-			ReusablePages: helpers.NewSet(availablePages...),
-			ReleasedPages: helpers.NewSet[PagePointer](),
-			pageUpdates:   map[PagePointer][]byte{},
+			TotalPages:     pagesNumber,
+			AvailablePages: pages.Clone(),
+			ReusablePages:  pages.Clone(),
+			ReleasedPages:  NewPageList(),
+			pageUpdates:    map[PagePointer][]byte{},
 		},
 	}
 }
@@ -70,7 +74,7 @@ func (pager *Pager) CreatePage(data []byte) PagePointer {
 		pager.state.TotalPages++
 
 		pagePointer = pager.state.TotalPages
-		pager.state.PagePool.Add(pagePointer)
+		pager.state.AvailablePages.Add(pagePointer)
 	}
 
 	pager.state.pageUpdates[pagePointer] = data
@@ -79,7 +83,7 @@ func (pager *Pager) CreatePage(data []byte) PagePointer {
 
 func (pager *Pager) FreePage(pointer PagePointer) {
 	// If released page was in page pool we can return it to reusable pages because nobody can reference this page
-	if pager.state.PagePool.Has(pointer) {
+	if pager.state.AvailablePages.Has(pointer) {
 		pager.state.ReusablePages.Add(pointer)
 	} else {
 		pager.state.ReleasedPages.Add(pointer)
@@ -88,12 +92,12 @@ func (pager *Pager) FreePage(pointer PagePointer) {
 	delete(pager.state.pageUpdates, pointer)
 }
 
-func (pager *Pager) ReleasedPages() []PagePointer {
-	return pager.state.ReleasedPages.Values()
+func (pager *Pager) ReleasedPages() PageList {
+	return pager.state.ReleasedPages
 }
 
-func (pager *Pager) ReusablePages() []PagePointer {
-	return pager.state.ReusablePages.Values()
+func (pager *Pager) ReusablePages() PageList {
+	return pager.state.ReusablePages
 }
 
 func (pager *Pager) TotalPages() uint64 {
@@ -130,11 +134,11 @@ func (pager *Pager) Snapshot() PagerState {
 	}
 
 	return PagerState{
-		TotalPages:    pager.state.TotalPages,
-		PagePool:      helpers.NewSet(pager.state.PagePool.Values()...),
-		ReusablePages: helpers.NewSet(pager.state.ReusablePages.Values()...),
-		ReleasedPages: helpers.NewSet(pager.state.ReleasedPages.Values()...),
-		pageUpdates:   pageUpdates,
+		TotalPages:     pager.state.TotalPages,
+		AvailablePages: pager.state.AvailablePages.Clone(),
+		ReusablePages:  pager.state.ReusablePages.Clone(),
+		ReleasedPages:  pager.state.ReleasedPages.Clone(),
+		pageUpdates:    pageUpdates,
 	}
 }
 
@@ -142,6 +146,6 @@ func (pager *Pager) Restore(state PagerState) {
 	pager.state = state
 }
 
-func (pager *Pager) Fork(pagesCount uint64, availablePages ...PagePointer) *Pager {
+func (pager *Pager) Fork(pagesCount uint64, availablePages ...PageList) *Pager {
 	return NewPager(pager.storage, pagesCount, pager.config.pageSize, availablePages...)
 }

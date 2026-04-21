@@ -13,11 +13,11 @@ var freePagesParsingError = errors.New("FreePages: couldn't parse event")
 
 type FreePages struct {
 	Version uint64
-	Pages   []pager.PagePointer
+	List    pager.PageList
 }
 
-func NewFreePages(dbVersion uint64, pages []pager.PagePointer) *FreePages {
-	return &FreePages{Version: dbVersion, Pages: pages}
+func NewFreePages(dbVersion uint64, list pager.PageList) *FreePages {
+	return &FreePages{Version: dbVersion, List: list}
 }
 
 func (event *FreePages) Name() string {
@@ -27,10 +27,11 @@ func (event *FreePages) Name() string {
 func (event *FreePages) Serialize() []byte {
 	serializedEvent := []byte(event.Name())
 	version := make([]byte, 8)
-	pages := make([]byte, len(event.Pages)*8)
+	pages := make([]byte, len(event.List.Pages())*16) // Each page range consists of two uint64 values (start and end)
 
-	for idx, page := range event.Pages {
-		binary.LittleEndian.PutUint64(pages[idx*8:], page)
+	for idx, interval := range event.List.Pages() {
+		binary.LittleEndian.PutUint64(pages[idx*16:], interval.Start)
+		binary.LittleEndian.PutUint64(pages[idx*16+8:], interval.End)
 	}
 
 	binary.LittleEndian.PutUint64(version, event.Version)
@@ -52,15 +53,17 @@ func ParseFreePages(data []byte) (*FreePages, error) {
 	serializedPages := data[offset+8:]
 
 	version := binary.LittleEndian.Uint64(serializedVersion)
-	pages := make([]pager.PagePointer, len(serializedPages)/8)
+	pages := make([]pager.PageInterval, len(serializedPages)/16)
 
-	for idx := 0; idx < len(serializedPages)/8; idx++ {
-		pages[idx] = binary.LittleEndian.Uint64(serializedPages[idx*8:])
+	for idx := 0; idx < len(serializedPages)/16; idx++ {
+		start := binary.LittleEndian.Uint64(serializedPages[idx*16:])
+		end := binary.LittleEndian.Uint64(serializedPages[idx*16+8:])
+		pages[idx] = pager.PageInterval{Start: start, End: end}
 	}
 
 	return &FreePages{
 		Version: version,
-		Pages:   pages,
+		List:    pager.NewPageList(pages...),
 	}, nil
 
 }

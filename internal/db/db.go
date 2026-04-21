@@ -43,7 +43,7 @@ type Database struct {
 	config  DatabaseConfig
 	storage store.Storage
 
-	pagePool     *helpers.MinMap[DatabaseVersion, pager.PagePointer]
+	pagePool     *helpers.MinMap[DatabaseVersion, pager.PageList]
 	transactions *helpers.MinMap[DatabaseVersion, *Transaction]
 	commitQueue  chan TransactionCommit
 
@@ -65,9 +65,10 @@ func NewDatabase(config DatabaseConfig) (*Database, error) {
 	db := &Database{
 		config: config,
 
-		pagePool:     helpers.NewMinMap[DatabaseVersion, pager.PagePointer](func(i, j DatabaseVersion) bool { return i < j }),
+		pagePool:     helpers.NewMinMap[DatabaseVersion, pager.PageList](func(i, j DatabaseVersion) bool { return i < j }),
 		transactions: helpers.NewMinMap[DatabaseVersion, *Transaction](func(i, j DatabaseVersion) bool { return i < j }),
-		commitQueue:  make(chan TransactionCommit, NUMBER_OF_PARALLEL_TRANSACTIONS),
+
+		commitQueue: make(chan TransactionCommit, NUMBER_OF_PARALLEL_TRANSACTIONS),
 	}
 
 	var err error
@@ -168,8 +169,9 @@ func (db *Database) runSyncLoop() {
 func (db *Database) commitBatch(transactions []TransactionCommit) {
 	latestUnreachableVersion := db.latestUnreachableVersion()
 
-	manager := newTableManager(db.header.root,
-		db.pager.Fork(db.header.pagesCount, db.collectReleasedPages(latestUnreachableVersion)...),
+	manager := newTableManager(
+		db.header.root,
+		db.pager.Fork(db.header.pagesCount, db.collectReleasedPages(latestUnreachableVersion)),
 	)
 
 	abortedTransactions := make([]TransactionCommit, 0)
@@ -183,7 +185,7 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 		}
 	}
 
-	releasedPages := manager.releasedPages()
+	committedReleasedPages := manager.releasedPages()
 	reusablePages := manager.reusablePages()
 
 	newHeader := &DatabaseHeader{
@@ -201,8 +203,8 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	db.wal.appendTransactions(approvedTransactions)
 	db.wal.appendVersionUpdate(db.header.version + 1)
 
-	db.wal.appendFreePages(latestUnreachableVersion, reusablePages) // These pages can be reused because they are not used by any active transaction (e.g. they were allocated and released in the same version)
-	db.wal.appendFreePages(db.header.version, releasedPages)        // These pages will be ready to safely reused only since next db version since they can be still used by active transactions in the current version
+	db.wal.appendFreePages(latestUnreachableVersion, reusablePages)   // These pages can be reused because they are not used by any active transaction (e.g. they were allocated and released in the same version)
+	db.wal.appendFreePages(db.header.version, committedReleasedPages) // These pages will be ready to safely reused only since next db version since they can be still used by active transactions in the current version
 
 	if err := db.wal.sync(); err != nil {
 		db.rejectTransactions(transactions, fmt.Errorf("Database: WAL flush failed: %w", err))
@@ -213,7 +215,7 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	db.rejectTransactions(abortedTransactions, errors.New("Database: transaction aborted due to conflicts with other transactions"))
 
 	db.releasePages(latestUnreachableVersion, reusablePages)
-	db.releasePages(db.header.version, releasedPages)
+	db.releasePages(db.header.version, committedReleasedPages)
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -261,21 +263,23 @@ func (db *Database) createTransaction(ctx context.Context) (*Transaction, error)
 	return tx, nil
 }
 
-func (db *Database) collectReleasedPages(target DatabaseVersion) []pager.PagePointer {
-	pages := make([]pager.PagePointer, 0)
+func (db *Database) collectReleasedPages(target DatabaseVersion) pager.PageList {
+	pageList := pager.NewPageList()
 
 	for {
 		if version, _, ok := db.pagePool.PeekMin(); ok && version <= target {
-			_, freedPages, _ := db.pagePool.PopMin()
-			pages = append(pages, freedPages...)
+			_, freedLists, _ := db.pagePool.PopMin()
+			for _, list := range freedLists {
+				pageList.AddMany(list.Pages())
+			}
 		} else {
-			return pages
+			return pageList
 		}
 	}
 }
 
-func (db *Database) releasePages(version DatabaseVersion, pages []pager.PagePointer) {
-	db.pagePool.AddMultiple(version, pages)
+func (db *Database) releasePages(version DatabaseVersion, list pager.PageList) {
+	db.pagePool.Add(version, list)
 }
 
 func (db *Database) latestUnreachableVersion() DatabaseVersion {
@@ -375,12 +379,12 @@ func (db *Database) recoverFromWAL() error {
 	restoredVersion := DatabaseVersion(0)
 	restoredTransactionID := TransactionID(0)
 
-	freePages := []pager.PagePointer{}
+	freePages := pager.NewPageList()
 
 	// FreePages events stored in WAL at the beginning of the events list because they are written to WAL UpdateDBVersion event
 	for _, event := range restoredEvents {
 		if event, ok := event.(*events.FreePages); ok {
-			freePages = append(freePages, event.Pages...)
+			freePages.AddMany(event.List.Pages())
 		} else {
 			break
 		}
@@ -397,7 +401,7 @@ func (db *Database) recoverFromWAL() error {
 		}
 	}
 
-	manager := newTableManager(db.header.root, db.pager.Fork(db.header.pagesCount, freePages...))
+	manager := newTableManager(db.header.root, db.pager.Fork(db.header.pagesCount, freePages))
 
 	if err := manager.applyChangeEvents(restoredEvents); err != nil {
 		return fmt.Errorf("Database: failed to apply events from WAL: %w", err)

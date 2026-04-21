@@ -91,12 +91,8 @@ func (wal *WAL) appendVersionUpdate(version DatabaseVersion) {
 	wal.appendEvent(events.NewUpdateDBVersion(uint64(version)))
 }
 
-func (wal *WAL) appendFreePages(version DatabaseVersion, pages []pager.PagePointer) {
-	if len(pages) == 0 {
-		return
-	}
-
-	wal.appendEvent(events.NewFreePages(uint64(version), pages))
+func (wal *WAL) appendFreePages(version DatabaseVersion, list pager.PageList) {
+	wal.appendEvent(events.NewFreePages(uint64(version), list))
 }
 
 func (wal *WAL) eventsSince(version DatabaseVersion) ([]TableEvent, error) {
