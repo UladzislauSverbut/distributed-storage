@@ -86,13 +86,16 @@ func (wal *WAL) appendTransactions(transactions []TransactionCommit) {
 		wal.appendEvent(events.NewCommitTransaction(uint64(transaction.ID)))
 	}
 }
+func (wal *WAL) appendFreePages(version DatabaseVersion, list pager.PageList) {
+	if list.Empty() {
+		return
+	}
+
+	wal.appendEvent(events.NewFreePages(uint64(version), list))
+}
 
 func (wal *WAL) appendVersionUpdate(version DatabaseVersion) {
 	wal.appendEvent(events.NewUpdateDBVersion(uint64(version)))
-}
-
-func (wal *WAL) appendFreePages(version DatabaseVersion, list pager.PageList) {
-	wal.appendEvent(events.NewFreePages(uint64(version), list))
 }
 
 func (wal *WAL) eventsSince(version DatabaseVersion) ([]TableEvent, error) {

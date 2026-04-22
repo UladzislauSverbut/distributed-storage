@@ -61,7 +61,7 @@ func (list PageList) AddMany(intervals []PageInterval) {
 }
 
 func (list PageList) Pop() (PagePointer, bool) {
-	if list.intervals.Len() == 0 {
+	if list.Empty() {
 		return NULL_PAGE, false
 	}
 
@@ -103,6 +103,10 @@ func (list PageList) Pages() []PageInterval {
 	}
 
 	return intervals
+}
+
+func (list PageList) Empty() bool {
+	return list.intervals.Len() == 0
 }
 
 func (list PageList) addInterval(interval PageInterval) {
