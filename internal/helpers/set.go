@@ -20,6 +20,7 @@ func (s *Set[T]) Add(element T) {
 	if s.elements == nil {
 		s.elements = make(map[T]struct{})
 	}
+
 	s.elements[element] = struct{}{}
 }
 
@@ -44,6 +45,7 @@ func (s *Set[T]) Remove(element T) {
 	if s.elements == nil {
 		return
 	}
+
 	delete(s.elements, element)
 }
 
@@ -53,6 +55,7 @@ func (s *Set[T]) Has(element T) bool {
 	}
 
 	_, exists := s.elements[element]
+
 	return exists
 }
 
@@ -62,6 +65,7 @@ func (s *Set[T]) Values() []T {
 	}
 
 	values := make([]T, 0, len(s.elements))
+
 	for key := range s.elements {
 		values = append(values, key)
 	}

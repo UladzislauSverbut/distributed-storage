@@ -17,8 +17,10 @@ func NewMinMap[Key comparable, Value any](comparator func(i, j Key) bool) *MinMa
 		index:      make(map[Key]int),
 		comparator: comparator,
 	}
+
 	m.heap.comparator = comparator
 	m.heap.index = m.index
+
 	return m
 }
 
@@ -36,11 +38,13 @@ func (m *MinMap[Key, Value]) AddMultiple(key Key, values []Value) ([]Value, bool
 	}
 
 	m.items[key] = append(m.items[key], values...)
+
 	return m.items[key], true
 }
 
 func (m *MinMap[Key, Value]) Get(key Key) ([]Value, bool) {
 	values, ok := m.items[key]
+
 	return values, ok
 }
 
@@ -49,7 +53,9 @@ func (m *MinMap[Key, Value]) PeekMin() (Key, []Value, bool) {
 		var empty Key
 		return empty, nil, false
 	}
+
 	key := m.heap.keys[0]
+
 	return key, m.items[key], true
 }
 
@@ -60,8 +66,10 @@ func (m *MinMap[Key, Value]) PopMin() (Key, []Value, bool) {
 	}
 	key := heap.Pop(&m.heap).(Key)
 	values := m.items[key]
+
 	delete(m.items, key)
 	delete(m.index, key)
+
 	return key, values, true
 }
 
@@ -70,9 +78,12 @@ func (m *MinMap[Key, Value]) RemoveKey(key Key) bool {
 	if !ok {
 		return false
 	}
+
 	heap.Remove(&m.heap, idx)
+
 	delete(m.items, key)
 	delete(m.index, key)
+
 	return true
 }
 

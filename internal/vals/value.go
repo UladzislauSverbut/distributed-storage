@@ -6,10 +6,9 @@ type ValueType = uint8
 
 type Value interface {
 	Type() ValueType
-	Size() int
 	Empty() bool
 	Serialize() []byte
-	Parse([]byte)
+	Parse([]byte) int
 }
 
 const (
@@ -23,17 +22,25 @@ const (
 
 func New(valueType ValueType) Value {
 	switch valueType {
+	case TYPE_NULL:
+		return &NullValue{}
 	case TYPE_STRING:
 		return &StringValue{}
 	case TYPE_INT32:
-		return &IntValue[int32]{}
+		return &Int32Value{}
 	case TYPE_INT64:
-		return &IntValue[int64]{}
+		return &Int64Value{}
 	case TYPE_UINT32:
-		return &IntValue[uint32]{}
+		return &Uint32Value{}
 	case TYPE_UINT64:
-		return &IntValue[uint64]{}
+		return &Uint64Value{}
 	default:
 		panic(fmt.Sprintf("Value can`t be created because type is not supported %d", valueType))
 	}
+}
+
+func ParseValue(valueType ValueType, data []byte) (Value, int) {
+	value := New(valueType)
+	size := value.Parse(data)
+	return value, size
 }

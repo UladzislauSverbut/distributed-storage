@@ -14,10 +14,9 @@ const HEADER_SIZE = len(DB_STORAGE_SIGNATURE) + 32
 const HEADER_PAGE = pager.PagePointer(0)
 
 var catalogSchema = TableSchema{
-	Name:         "@catalog",
-	ColumnNames:  []string{"name", "definition", "root", "size"},
-	PrimaryIndex: []string{"name"},
-	ColumnTypes:  map[string]vals.ValueType{"name": vals.TYPE_STRING, "definition": vals.TYPE_STRING, "root": vals.TYPE_UINT64, "size": vals.TYPE_UINT64},
+	Name:           "@catalog",
+	PrimaryIndex:   []string{"name"},
+	IndexedColumns: map[string]vals.ValueType{"name": vals.TYPE_STRING},
 }
 
 type TableManager struct {
@@ -100,7 +99,6 @@ func (manager *TableManager) createTable(schema *TableSchema) (*Table, error) {
 }
 
 func (manager *TableManager) deleteTable(name string) error {
-
 	oldRecord, err := manager.catalog.Delete(manager.tableQuery(name))
 	if err != nil {
 		return fmt.Errorf("Catalog: couldn't delete table %s from catalog: %w", name, err)
@@ -176,10 +174,10 @@ func (manager *TableManager) applyChangeEvents(changeEvents []TableEvent) (err e
 		}
 	}
 
-	return manager.updateTables()
+	return manager.saveChanges()
 }
 
-func (manager *TableManager) updateTables() error {
+func (manager *TableManager) saveChanges() error {
 	// We only need to update tables that were changed
 	for name, table := range manager.loadedTables {
 		if err := manager.updateTable(name, table); err != nil {
@@ -335,5 +333,5 @@ func (manager *TableManager) encodeTable(table *Table) *vals.Object {
 	return vals.NewObject().
 		Set("name", vals.NewString(table.schema.Name)).
 		Set("definition", vals.NewString(string(stringifiedSchema))).
-		Set("root", vals.NewInt(table.Root()))
+		Set("root", vals.NewUint64(table.Root()))
 }

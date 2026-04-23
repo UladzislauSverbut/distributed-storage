@@ -1,7 +1,7 @@
 package vals
 
 type Object struct {
-	values map[string]Value
+	fields map[string]Value
 }
 
 func (object *Object) GetMany(fields []string) []Value {
@@ -15,19 +15,19 @@ func (object *Object) GetMany(fields []string) []Value {
 }
 
 func (object *Object) Has(field string) bool {
-	_, ok := object.values[field]
+	_, ok := object.fields[field]
 
 	return ok
 }
 
 func (object *Object) Set(field string, value Value) *Object {
-	object.values[field] = value
+	object.fields[field] = value
 
 	return object
 }
 
 func (object *Object) Get(field string) Value {
-	value, ok := object.values[field]
+	value, ok := object.fields[field]
 
 	if ok {
 		return value
@@ -41,21 +41,27 @@ func (object *Object) GetString(field string) string {
 }
 
 func (object *Object) GetUint32(field string) uint32 {
-	return object.Get(field).(*IntValue[uint32]).Value()
+	return object.Get(field).(*Uint32Value).Value()
 }
 
 func (object *Object) GetUint64(field string) uint64 {
-	return object.Get(field).(*IntValue[uint64]).Value()
+	return object.Get(field).(*Uint64Value).Value()
 }
 
 func (object *Object) GetInt32(field string) int32 {
-	return object.Get(field).(*IntValue[int32]).Value()
+	return object.Get(field).(*Int32Value).Value()
 }
 
 func (object *Object) GetInt64(field string) int64 {
-	return object.Get(field).(*IntValue[int64]).Value()
+	return object.Get(field).(*Int64Value).Value()
+}
+
+func (object *Object) Values() map[string]Value {
+	return object.fields
 }
 
 func NewObject() *Object {
-	return &Object{values: make(map[string]Value)}
+	return &Object{
+		fields: make(map[string]Value),
+	}
 }

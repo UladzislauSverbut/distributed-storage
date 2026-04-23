@@ -16,10 +16,9 @@ const INDEX_ID_SIZE int = 4    // Size of index section id in bytes
 
 type TableSchema struct {
 	Name             string
-	ColumnNames      []string
 	PrimaryIndex     []string
 	SecondaryIndexes [][]string
-	ColumnTypes      map[string]vals.ValueType
+	IndexedColumns   map[string]vals.ValueType
 }
 
 type Table struct {
@@ -320,15 +319,10 @@ func (table *Table) encodePayload(record *vals.Object) []byte {
 
 	encodedPayload := make([]byte, 0)
 
-	for _, columnName := range table.schema.ColumnNames {
-		columnValue := record.Get(columnName)
-
-		if columnValue.Empty() {
-			encodedPayload = append(encodedPayload, byte(0))
-		} else {
-			encodedPayload = append(encodedPayload, byte(1))
-			encodedPayload = append(encodedPayload, columnValue.Serialize()...)
-		}
+	for fieldName, fieldValue := range record.Values() {
+		encodedPayload = append(encodedPayload, vals.NewString(fieldName).Serialize()...)
+		encodedPayload = append(encodedPayload, fieldValue.Type())
+		encodedPayload = append(encodedPayload, fieldValue.Serialize()...)
 	}
 
 	return encodedPayload
@@ -341,17 +335,17 @@ func (table *Table) decodePayload(encodedPayload []byte) *vals.Object {
 
 	record := vals.NewObject()
 
-	for _, columnName := range table.schema.ColumnNames {
-		if encodedPayload[0] == 0 {
-			record.Set(columnName, vals.NewNull())
-		} else {
-			columnValue := vals.New(table.schema.ColumnTypes[columnName])
-			columnValue.Parse(encodedPayload[1:])
+	for len(encodedPayload) > 0 {
+		fieldName, size := vals.ParseString(encodedPayload)
+		encodedPayload = encodedPayload[size:]
 
-			encodedPayload = encodedPayload[columnValue.Size()+1:]
+		fieldType := encodedPayload[0]
+		encodedPayload = encodedPayload[1:]
 
-			record.Set(columnName, columnValue)
-		}
+		fieldValue, size := vals.ParseValue(fieldType, encodedPayload)
+		encodedPayload = encodedPayload[size:]
+
+		record.Set(fieldName.Value(), fieldValue)
 	}
 
 	return record
@@ -404,19 +398,21 @@ func (table *Table) decodeSecondaryIndex(encodedIndex []byte) (primaryIndexVals 
 	encodedIndex = encodedIndex[INDEX_ID_SIZE:]
 
 	for _, columnName := range table.schema.SecondaryIndexes[secondaryIndexNumber] {
-		columnValue := vals.New(table.schema.ColumnTypes[columnName])
-		columnValue.Parse(encodedIndex)
+		columnValue := vals.New(table.schema.IndexedColumns[columnName])
+		size := columnValue.Parse(encodedIndex[1:]) // skip type byte
+
 		secondaryIndexVals = append(secondaryIndexVals, columnValue)
 
-		encodedIndex = encodedIndex[columnValue.Size():]
+		encodedIndex = encodedIndex[size:]
 	}
 
 	for _, columnName := range table.schema.PrimaryIndex {
-		columnValue := vals.New(table.schema.ColumnTypes[columnName])
-		columnValue.Parse(encodedIndex)
+		columnValue := vals.New(table.schema.IndexedColumns[columnName])
+		size := columnValue.Parse(encodedIndex[1:]) // skip type byte
+
 		primaryIndexVals = append(primaryIndexVals, columnValue)
 
-		encodedIndex = encodedIndex[columnValue.Size():]
+		encodedIndex = encodedIndex[size:]
 	}
 
 	return
@@ -461,10 +457,6 @@ func (table *Table) removeEmptyValues(values []vals.Value) []vals.Value {
 func (table *Table) validateTableSchema() error {
 	if table.schema.Name == "" {
 		return fmt.Errorf("Table: schema must have a name")
-	}
-
-	if len(table.schema.ColumnNames) == 0 {
-		return fmt.Errorf("Table: schema must have at least one column")
 	}
 
 	if len(table.schema.PrimaryIndex) == 0 {
