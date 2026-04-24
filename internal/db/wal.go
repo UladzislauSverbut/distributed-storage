@@ -77,13 +77,13 @@ func (wal *WAL) appendTransactions(transactions []TransactionCommit) {
 	}
 
 	for _, transaction := range transactions {
-		wal.appendEvent(events.NewStartTransaction(uint64(transaction.ID)))
+		wal.appendEvent(events.NewStartTransaction())
 
 		for _, event := range transaction.ChangeEvents {
 			wal.appendEvent(event)
 		}
 
-		wal.appendEvent(events.NewCommitTransaction(uint64(transaction.ID)))
+		wal.appendEvent(events.NewCommitTransaction())
 	}
 }
 func (wal *WAL) appendFreePages(version DatabaseVersion, list pager.PageList) {

@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -28,10 +27,9 @@ const SYNC_INTERVAL = 100 * time.Millisecond
 type DatabaseVersion uint64
 
 type DatabaseHeader struct {
-	root          pager.PagePointer
-	version       DatabaseVersion
-	pagesCount    uint64
-	transactionID *atomic.Uint64 // It's reference to TransactionID but with atomic operations support
+	root       pager.PagePointer
+	version    DatabaseVersion
+	nextPageID pager.PagePointer
 }
 
 type Database struct {
@@ -85,7 +83,7 @@ func NewDatabase(config DatabaseConfig) (*Database, error) {
 		return nil, fmt.Errorf("Database: failed to read header: %w", err)
 	}
 
-	db.pager = pager.NewPager(db.storage, db.header.pagesCount, db.config.PageSize)
+	db.pager = pager.NewPager(db.storage, db.header.nextPageID, db.config.PageSize)
 
 	if db.wal, err = newWAL(config); err != nil {
 		return nil, fmt.Errorf("Database: failed to initialize WAL: %w", err)
@@ -171,7 +169,7 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 
 	manager := newTableManager(
 		db.header.root,
-		db.pager.Fork(db.header.pagesCount, db.collectReleasedPages(latestUnreachableVersion)),
+		db.pager.Fork(db.header.nextPageID, db.collectReleasedPages(latestUnreachableVersion)),
 	)
 
 	abortedTransactions := make([]TransactionCommit, 0)
@@ -189,10 +187,9 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	reusablePages := manager.reusablePages()
 
 	newHeader := &DatabaseHeader{
-		root:          manager.root(),
-		version:       db.header.version + 1,
-		pagesCount:    manager.totalPages(),
-		transactionID: db.header.transactionID,
+		root:       manager.root(),
+		version:    db.header.version + 1,
+		nextPageID: manager.totalPages(),
 	}
 
 	if err := manager.commit(db.serializeHeader(newHeader)); err != nil {
@@ -246,9 +243,8 @@ func (db *Database) createTransaction(ctx context.Context) (*Transaction, error)
 	db.mu.RUnlock()
 
 	tx := &Transaction{
-		id:      TransactionID(header.transactionID.Add(1)),
 		version: header.version,
-		manager: newTableManager(header.root, db.pager.Fork(header.pagesCount)),
+		manager: newTableManager(header.root, db.pager.Fork(header.nextPageID)),
 
 		commitQueue: db.commitQueue,
 		ctx:         ctx,
@@ -308,10 +304,9 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 
 	if helpers.IsZero(signature) {
 		return &DatabaseHeader{
-			root:          pager.NULL_PAGE,
-			version:       INITIAL_DB_VERSION,
-			pagesCount:    1, // Reserve page for header
-			transactionID: &atomic.Uint64{},
+			root:       pager.NULL_PAGE,
+			version:    INITIAL_DB_VERSION,
+			nextPageID: 1, // Reserve 1 page for header
 		}, nil
 	}
 
@@ -322,13 +317,10 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 	signatureSize := len(DB_STORAGE_SIGNATURE)
 
 	header := &DatabaseHeader{
-		root:          pager.PagePointer(binary.LittleEndian.Uint64(headerBlock[signatureSize : signatureSize+8])),
-		version:       DatabaseVersion(binary.LittleEndian.Uint64(headerBlock[signatureSize+8 : signatureSize+16])),
-		pagesCount:    binary.LittleEndian.Uint64(headerBlock[signatureSize+16 : signatureSize+24]),
-		transactionID: &atomic.Uint64{},
+		root:       pager.PagePointer(binary.LittleEndian.Uint64(headerBlock[signatureSize : signatureSize+8])),
+		version:    DatabaseVersion(binary.LittleEndian.Uint64(headerBlock[signatureSize+8 : signatureSize+16])),
+		nextPageID: pager.PagePointer(binary.LittleEndian.Uint64(headerBlock[signatureSize+16 : signatureSize+24])),
 	}
-
-	header.transactionID.Store(binary.LittleEndian.Uint64(headerBlock[signatureSize+24 : signatureSize+32]))
 
 	return header, nil
 }
@@ -340,8 +332,7 @@ func (db *Database) serializeHeader(header *DatabaseHeader) []byte {
 	copy(headerBlock[0:signatureSize], []byte(DB_STORAGE_SIGNATURE))
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize:signatureSize+8], uint64(header.root))
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize+8:signatureSize+16], uint64(header.version))
-	binary.LittleEndian.PutUint64(headerBlock[signatureSize+16:signatureSize+24], header.pagesCount)
-	binary.LittleEndian.PutUint64(headerBlock[signatureSize+24:signatureSize+32], uint64(header.transactionID.Load()))
+	binary.LittleEndian.PutUint64(headerBlock[signatureSize+16:signatureSize+24], uint64(header.nextPageID))
 
 	return headerBlock
 }
@@ -377,7 +368,6 @@ func (db *Database) recoverFromWAL() error {
 	}
 
 	restoredVersion := DatabaseVersion(0)
-	restoredTransactionID := TransactionID(0)
 
 	freePages := pager.NewPageList()
 
@@ -391,17 +381,15 @@ func (db *Database) recoverFromWAL() error {
 	}
 
 	// After commit at the end of WAL we have events in the following order: Table changes -> CommitTransaction -> UpdateDBVersion
-	// We need to iterate over events in reverse order to get latest database version and transaction ID
+	// We need to iterate over events in reverse order to get latest database version
 	for eventIdx := len(restoredEvents) - 1; eventIdx >= 0; eventIdx-- {
 		if event, ok := restoredEvents[eventIdx].(*events.UpdateDBVersion); ok {
 			restoredVersion = DatabaseVersion(event.Version)
-		} else if event, ok := restoredEvents[eventIdx].(*events.CommitTransaction); ok {
-			restoredTransactionID = TransactionID(event.ID)
 			break
 		}
 	}
 
-	manager := newTableManager(db.header.root, db.pager.Fork(db.header.pagesCount, freePages))
+	manager := newTableManager(db.header.root, db.pager.Fork(db.header.nextPageID, freePages))
 
 	if err := manager.applyChangeEvents(restoredEvents); err != nil {
 		return fmt.Errorf("Database: failed to apply events from WAL: %w", err)
@@ -409,8 +397,7 @@ func (db *Database) recoverFromWAL() error {
 
 	db.header.version = restoredVersion
 	db.header.root = manager.root()
-	db.header.pagesCount = manager.totalPages()
-	db.header.transactionID.Store(uint64(restoredTransactionID))
+	db.header.nextPageID = manager.totalPages()
 
 	if err := manager.commit(db.serializeHeader(db.header)); err != nil {
 		return fmt.Errorf("Database: failed to commit restored state: %w", err)

@@ -14,7 +14,7 @@ type PagerConfig struct {
 }
 
 type PagerState struct {
-	TotalPages     uint64                 // Total number of pages in storage
+	NextPageID     PagePointer            // ID of the next page that will be created
 	AvailablePages PageList               // List  of pages that are not reachable by others and could be mutated
 	ReusablePages  PageList               // List of pages that can be reused by others
 	ReleasedPages  PageList               // List of pages that were released and cannot be overwritten due to immutability
@@ -27,7 +27,7 @@ type Pager struct {
 	state   PagerState
 }
 
-func NewPager(storage store.Storage, pagesNumber uint64, pageSize int, availablePages ...PageList) *Pager {
+func NewPager(storage store.Storage, nextPageID PagePointer, pageSize int, availablePages ...PageList) *Pager {
 	pages := NewPageList()
 	if len(availablePages) > 0 {
 		pages = availablePages[0]
@@ -39,7 +39,7 @@ func NewPager(storage store.Storage, pagesNumber uint64, pageSize int, available
 			pageSize: pageSize,
 		},
 		state: PagerState{
-			TotalPages:     pagesNumber,
+			NextPageID:     nextPageID,
 			AvailablePages: pages.Clone(),
 			ReusablePages:  pages.Clone(),
 			ReleasedPages:  NewPageList(),
@@ -57,8 +57,8 @@ func (pager *Pager) Page(pointer PagePointer) []byte {
 }
 
 func (pager *Pager) UpdatePage(pointer PagePointer, data []byte) error {
-	if pointer > pager.state.TotalPages {
-		return fmt.Errorf("Pager: invalid page pointer %d (total pages: %d)", pointer, pager.state.TotalPages)
+	if pointer >= pager.state.NextPageID {
+		return fmt.Errorf("Pager: invalid page pointer %d (next page ID: %d)", pointer, pager.state.NextPageID)
 	}
 
 	pager.state.pageUpdates[pointer] = data
@@ -71,10 +71,10 @@ func (pager *Pager) CreatePage(data []byte) PagePointer {
 	if availablePage, ok := pager.state.ReusablePages.Pop(); ok {
 		pagePointer = availablePage
 	} else {
-		pager.state.TotalPages++
-
-		pagePointer = pager.state.TotalPages
+		pagePointer = pager.state.NextPageID
 		pager.state.AvailablePages.Add(pagePointer)
+
+		pager.state.NextPageID++
 	}
 
 	pager.state.pageUpdates[pagePointer] = data
@@ -101,7 +101,7 @@ func (pager *Pager) ReusablePages() PageList {
 }
 
 func (pager *Pager) TotalPages() uint64 {
-	return pager.state.TotalPages
+	return pager.state.NextPageID
 }
 
 func (pager *Pager) SaveChanges() error {
@@ -134,7 +134,7 @@ func (pager *Pager) Snapshot() PagerState {
 	}
 
 	return PagerState{
-		TotalPages:     pager.state.TotalPages,
+		NextPageID:     pager.state.NextPageID,
 		AvailablePages: pager.state.AvailablePages.Clone(),
 		ReusablePages:  pager.state.ReusablePages.Clone(),
 		ReleasedPages:  pager.state.ReleasedPages.Clone(),
@@ -146,6 +146,6 @@ func (pager *Pager) Restore(state PagerState) {
 	pager.state = state
 }
 
-func (pager *Pager) Fork(pagesCount uint64, availablePages ...PageList) *Pager {
-	return NewPager(pager.storage, pagesCount, pager.config.pageSize, availablePages...)
+func (pager *Pager) Fork(nextPageID PagePointer, availablePages ...PageList) *Pager {
+	return NewPager(pager.storage, nextPageID, pager.config.pageSize, availablePages...)
 }

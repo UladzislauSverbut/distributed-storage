@@ -14,8 +14,8 @@ type StartTransaction struct {
 	ID uint64
 }
 
-func NewStartTransaction(txID uint64) *StartTransaction {
-	return &StartTransaction{ID: txID}
+func NewStartTransaction() *StartTransaction {
+	return &StartTransaction{}
 }
 
 func (event *StartTransaction) Name() string {
@@ -40,9 +40,5 @@ func ParseStartTransaction(data []byte) (*StartTransaction, error) {
 		return nil, startTransactionParsingError
 	}
 
-	serializedID := data[offset : offset+8]
-
-	return &StartTransaction{
-		ID: binary.LittleEndian.Uint64(serializedID),
-	}, nil
+	return &StartTransaction{}, nil
 }

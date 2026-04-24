@@ -6,11 +6,9 @@ import (
 	"sync/atomic"
 )
 
-type TransactionID uint64
 type TransactionState int32
 
 type TransactionCommit struct {
-	ID              TransactionID
 	DatabaseVersion DatabaseVersion
 	ReadEvents      []TableEvent
 	ChangeEvents    []TableEvent
@@ -23,7 +21,6 @@ type TransactionCommitResponse struct {
 }
 
 type Transaction struct {
-	id      TransactionID
 	version DatabaseVersion
 	state   atomic.Int32 // It's reference to TransactionState but with atomic operations support
 	manager *TableManager
@@ -53,7 +50,7 @@ func (tx *Transaction) Commit() (err error) {
 	}()
 
 	if !tx.setCommitting() {
-		return fmt.Errorf("Transaction: couldn't commit transaction with id %d because it is not active", tx.id)
+		return fmt.Errorf("Transaction: couldn't commit transaction because it is not active")
 	}
 
 	// If there is nothing to write, then just return
@@ -66,7 +63,6 @@ func (tx *Transaction) Commit() (err error) {
 	responseChannel := make(chan TransactionCommitResponse, 1)
 
 	tx.commitQueue <- TransactionCommit{
-		ID:              tx.id,
 		DatabaseVersion: tx.version,
 		ChangeEvents:    tx.manager.changeEvents(),
 		Response:        responseChannel,
@@ -83,7 +79,7 @@ func (tx *Transaction) Commit() (err error) {
 		}
 	case <-tx.ctx.Done():
 		tx.setAborted()
-		return fmt.Errorf("Transaction: commit transaction with id %d cancelled by context", tx.id)
+		return fmt.Errorf("Transaction: commit transaction cancelled by context")
 	}
 }
 
