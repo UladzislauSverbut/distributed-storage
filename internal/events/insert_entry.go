@@ -11,13 +11,13 @@ const INSERT_ENTRY_EVENT = "INSERT_ENTRY"
 var insertEntryParsingError = errors.New("InsertEntry: couldn't parse event")
 
 type InsertEntry struct {
-	TableName string
-	Key       []byte
-	Value     []byte
+	TableID uint64
+	Key     []byte
+	Value   []byte
 }
 
-func NewInsertEntry(tableName string, key []byte, value []byte) *InsertEntry {
-	return &InsertEntry{TableName: tableName, Key: key, Value: value}
+func NewInsertEntry(tableID uint64, key []byte, value []byte) *InsertEntry {
+	return &InsertEntry{TableID: tableID, Key: key, Value: value}
 }
 
 func (event *InsertEntry) Name() string {
@@ -26,14 +26,13 @@ func (event *InsertEntry) Name() string {
 
 func (event *InsertEntry) Serialize() []byte {
 	serializedEvent := []byte(event.Name())
-	serializedTableNameLength := make([]byte, 8)
+	serializedTableID := make([]byte, 8)
 	keyLength := make([]byte, 8)
 
-	binary.LittleEndian.PutUint64(serializedTableNameLength, uint64(len(event.TableName)))
+	binary.LittleEndian.PutUint64(serializedTableID, event.TableID)
 	binary.LittleEndian.PutUint64(keyLength, uint64(len(event.Key)))
 
-	serializedEvent = append(serializedEvent, serializedTableNameLength...)
-	serializedEvent = append(serializedEvent, []byte(event.TableName)...)
+	serializedEvent = append(serializedEvent, serializedTableID...)
 	serializedEvent = append(serializedEvent, keyLength...)
 	serializedEvent = append(serializedEvent, event.Key...)
 	serializedEvent = append(serializedEvent, event.Value...)
@@ -48,11 +47,8 @@ func ParseInsertEntry(data []byte) (*InsertEntry, error) {
 		return nil, insertEntryParsingError
 	}
 
-	serializedTableNameLength := binary.LittleEndian.Uint64(data[offset : offset+8])
+	tableID := binary.LittleEndian.Uint64(data[offset : offset+8])
 	offset += 8
-
-	tableName := string(data[offset : offset+int(serializedTableNameLength)])
-	offset += int(serializedTableNameLength)
 
 	keyLength := binary.LittleEndian.Uint64(data[offset : offset+8])
 	offset += 8
@@ -62,5 +58,5 @@ func ParseInsertEntry(data []byte) (*InsertEntry, error) {
 
 	value := data[offset:]
 
-	return NewInsertEntry(tableName, key, value), nil
+	return NewInsertEntry(tableID, key, value), nil
 }

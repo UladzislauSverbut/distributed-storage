@@ -2,7 +2,6 @@ package events
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 )
 
@@ -10,9 +9,7 @@ const START_TRANSACTION_EVENT = "START_TRANSACTION"
 
 var startTransactionParsingError = errors.New("StartTransaction: couldn't parse event")
 
-type StartTransaction struct {
-	ID uint64
-}
+type StartTransaction struct{}
 
 func NewStartTransaction() *StartTransaction {
 	return &StartTransaction{}
@@ -23,14 +20,7 @@ func (event *StartTransaction) Name() string {
 }
 
 func (event *StartTransaction) Serialize() []byte {
-	serializedEvent := []byte(event.Name())
-	serializedID := make([]byte, 8)
-
-	binary.LittleEndian.PutUint64(serializedID, event.ID)
-
-	serializedEvent = append(serializedEvent, serializedID...)
-
-	return serializedEvent
+	return []byte(event.Name())
 }
 
 func ParseStartTransaction(data []byte) (*StartTransaction, error) {

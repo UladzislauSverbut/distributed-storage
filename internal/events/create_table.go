@@ -12,12 +12,12 @@ var createTableParsingError = errors.New("CreateTable: couldn't parse event")
 
 // CreateTable describes creation of a table. Schema is stored as JSON.
 type CreateTable struct {
-	TableName string
-	Schema    []byte // JSON-encoded TableSchema
+	TableID uint64
+	Schema  []byte // JSON-encoded TableSchema
 }
 
-func NewCreateTable(tableName string, schema []byte) *CreateTable {
-	return &CreateTable{TableName: tableName, Schema: schema}
+func NewCreateTable(tableID uint64, schema []byte) *CreateTable {
+	return &CreateTable{TableID: tableID, Schema: schema}
 }
 
 func (event *CreateTable) Name() string {
@@ -26,13 +26,10 @@ func (event *CreateTable) Name() string {
 
 func (event *CreateTable) Serialize() []byte {
 	serializedEvent := []byte(event.Name())
-	serializedTableName := []byte(event.TableName)
-	serializedTableNameLength := make([]byte, 8)
+	serializedTableID := make([]byte, 8)
+	binary.LittleEndian.PutUint64(serializedTableID, event.TableID)
 
-	binary.LittleEndian.PutUint64(serializedTableNameLength, uint64(len(serializedTableName)))
-
-	serializedEvent = append(serializedEvent, serializedTableNameLength...)
-	serializedEvent = append(serializedEvent, serializedTableName...)
+	serializedEvent = append(serializedEvent, serializedTableID...)
 	serializedEvent = append(serializedEvent, event.Schema...)
 
 	return serializedEvent
@@ -45,13 +42,10 @@ func ParseCreateTable(data []byte) (*CreateTable, error) {
 		return nil, createTableParsingError
 	}
 
-	serializedTableNameLength := binary.LittleEndian.Uint64(data[offset : offset+8])
+	tableID := binary.LittleEndian.Uint64(data[offset : offset+8])
 	offset += 8
-
-	tableName := string(data[offset : offset+int(serializedTableNameLength)])
-	offset += int(serializedTableNameLength)
 
 	schema := data[offset:]
 
-	return NewCreateTable(tableName, schema), nil
+	return NewCreateTable(tableID, schema), nil
 }

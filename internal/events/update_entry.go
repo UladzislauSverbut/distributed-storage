@@ -11,14 +11,14 @@ const UPDATE_ENTRY_EVENT = "UPDATE_ENTRY"
 var updateEntryParsingError = errors.New("UpdateEntry: couldn't parse event")
 
 type UpdateEntry struct {
-	TableName string
-	Key       []byte
-	NewValue  []byte
-	OldValue  []byte
+	TableID  uint64
+	Key      []byte
+	NewValue []byte
+	OldValue []byte
 }
 
-func NewUpdateEntry(tableName string, key []byte, oldValue []byte, newValue []byte) *UpdateEntry {
-	return &UpdateEntry{TableName: tableName, Key: key, OldValue: oldValue, NewValue: newValue}
+func NewUpdateEntry(tableID uint64, key []byte, oldValue []byte, newValue []byte) *UpdateEntry {
+	return &UpdateEntry{TableID: tableID, Key: key, OldValue: oldValue, NewValue: newValue}
 }
 
 func (event *UpdateEntry) Name() string {
@@ -27,16 +27,15 @@ func (event *UpdateEntry) Name() string {
 
 func (event *UpdateEntry) Serialize() []byte {
 	serializedEvent := []byte(event.Name())
-	serializedTableNameLength := make([]byte, 8)
+	serializedTableID := make([]byte, 8)
 	keyLength := make([]byte, 8)
 	oldValueLength := make([]byte, 8)
 
-	binary.LittleEndian.PutUint64(serializedTableNameLength, uint64(len(event.TableName)))
+	binary.LittleEndian.PutUint64(serializedTableID, event.TableID)
 	binary.LittleEndian.PutUint64(keyLength, uint64(len(event.Key)))
 	binary.LittleEndian.PutUint64(oldValueLength, uint64(len(event.OldValue)))
 
-	serializedEvent = append(serializedEvent, serializedTableNameLength...)
-	serializedEvent = append(serializedEvent, []byte(event.TableName)...)
+	serializedEvent = append(serializedEvent, serializedTableID...)
 	serializedEvent = append(serializedEvent, keyLength...)
 	serializedEvent = append(serializedEvent, event.Key...)
 	serializedEvent = append(serializedEvent, oldValueLength...)
@@ -53,11 +52,8 @@ func ParseUpdateEntry(data []byte) (*UpdateEntry, error) {
 		return nil, updateEntryParsingError
 	}
 
-	serializedTableNameLength := binary.LittleEndian.Uint64(data[offset : offset+8])
+	tableID := binary.LittleEndian.Uint64(data[offset : offset+8])
 	offset += 8
-
-	tableName := string(data[offset : offset+int(serializedTableNameLength)])
-	offset += int(serializedTableNameLength)
 
 	keyLength := binary.LittleEndian.Uint64(data[offset : offset+8])
 	offset += 8
@@ -73,5 +69,5 @@ func ParseUpdateEntry(data []byte) (*UpdateEntry, error) {
 
 	newValue := data[offset:]
 
-	return NewUpdateEntry(tableName, key, oldValue, newValue), nil
+	return NewUpdateEntry(tableID, key, oldValue, newValue), nil
 }

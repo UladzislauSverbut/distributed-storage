@@ -11,13 +11,13 @@ const DELETE_ENTRY_EVENT = "DELETE_ENTRY"
 var deleteEntryParsingError = errors.New("DeleteEntry: couldn't parse event")
 
 type DeleteEntry struct {
-	TableName string
-	Key       []byte
-	Value     []byte
+	TableID uint64
+	Key     []byte
+	Value   []byte
 }
 
-func NewDeleteEntry(tableName string, key []byte, value []byte) *DeleteEntry {
-	return &DeleteEntry{TableName: tableName, Key: key, Value: value}
+func NewDeleteEntry(tableID uint64, key []byte, value []byte) *DeleteEntry {
+	return &DeleteEntry{TableID: tableID, Key: key, Value: value}
 }
 
 func (event *DeleteEntry) Name() string {
@@ -26,14 +26,13 @@ func (event *DeleteEntry) Name() string {
 
 func (event *DeleteEntry) Serialize() []byte {
 	serializedEvent := []byte(event.Name())
-	serializedTableNameLength := make([]byte, 8)
+	serializedTableID := make([]byte, 8)
 	serializedKeyLength := make([]byte, 8)
 
-	binary.LittleEndian.PutUint64(serializedTableNameLength, uint64(len(event.TableName)))
+	binary.LittleEndian.PutUint64(serializedTableID, event.TableID)
 	binary.LittleEndian.PutUint64(serializedKeyLength, uint64(len(event.Key)))
 
-	serializedEvent = append(serializedEvent, serializedTableNameLength...)
-	serializedEvent = append(serializedEvent, []byte(event.TableName)...)
+	serializedEvent = append(serializedEvent, serializedTableID...)
 	serializedEvent = append(serializedEvent, serializedKeyLength...)
 	serializedEvent = append(serializedEvent, event.Key...)
 	serializedEvent = append(serializedEvent, event.Value...)
@@ -48,11 +47,8 @@ func ParseDeleteEntry(data []byte) (*DeleteEntry, error) {
 		return nil, deleteEntryParsingError
 	}
 
-	serializedTableNameLength := binary.LittleEndian.Uint64(data[offset : offset+8])
+	tableID := binary.LittleEndian.Uint64(data[offset : offset+8])
 	offset += 8
-
-	tableName := string(data[offset : offset+int(serializedTableNameLength)])
-	offset += int(serializedTableNameLength)
 
 	keyLength := binary.LittleEndian.Uint64(data[offset : offset+8])
 	offset += 8
@@ -62,5 +58,5 @@ func ParseDeleteEntry(data []byte) (*DeleteEntry, error) {
 
 	value := data[offset:]
 
-	return NewDeleteEntry(tableName, key, value), nil
+	return NewDeleteEntry(tableID, key, value), nil
 }

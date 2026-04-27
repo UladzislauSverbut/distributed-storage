@@ -9,8 +9,7 @@ const COMMIT_TRANSACTION_EVENT = "COMMIT_TRANSACTION"
 
 var commitTransactionParsingError = errors.New("CommitTransaction: couldn't parse event")
 
-type CommitTransaction struct {
-}
+type CommitTransaction struct{}
 
 func NewCommitTransaction() *CommitTransaction {
 	return &CommitTransaction{}

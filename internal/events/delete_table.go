@@ -2,6 +2,7 @@ package events
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 )
 
@@ -10,11 +11,11 @@ const DELETE_TABLE_EVENT = "DELETE_TABLE"
 var deleteTableParsingError = errors.New("DeleteTable: couldn't parse event")
 
 type DeleteTable struct {
-	TableName string
+	TableID uint64
 }
 
-func NewDeleteTable(tableName string) *DeleteTable {
-	return &DeleteTable{TableName: tableName}
+func NewDeleteTable(tableID uint64) *DeleteTable {
+	return &DeleteTable{TableID: tableID}
 }
 
 func (event *DeleteTable) Name() string {
@@ -23,7 +24,11 @@ func (event *DeleteTable) Name() string {
 
 func (event *DeleteTable) Serialize() []byte {
 	serializedEvent := []byte(event.Name())
-	serializedEvent = append(serializedEvent, []byte(event.TableName)...)
+	serializedTableID := make([]byte, 8)
+
+	binary.LittleEndian.PutUint64(serializedTableID, event.TableID)
+
+	serializedEvent = append(serializedEvent, serializedTableID...)
 
 	return serializedEvent
 }
@@ -35,7 +40,7 @@ func ParseDeleteTable(data []byte) (*DeleteTable, error) {
 		return nil, deleteTableParsingError
 	}
 
-	tableName := string(data[offset:])
+	tableID := binary.LittleEndian.Uint64(data[offset:])
 
-	return NewDeleteTable(tableName), nil
+	return NewDeleteTable(tableID), nil
 }

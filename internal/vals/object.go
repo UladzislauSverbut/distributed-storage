@@ -36,6 +36,19 @@ func (object *Object) Get(field string) Value {
 	}
 }
 
+func (object *Object) Merge(other *Object) *Object {
+	mergedObject := NewObject()
+
+	for field, value := range object.Values() {
+		mergedObject.Set(field, value)
+	}
+
+	for field, value := range other.Values() {
+		mergedObject.Set(field, value)
+	}
+	return mergedObject
+}
+
 func (object *Object) GetString(field string) string {
 	return object.Get(field).(*StringValue).Value()
 }

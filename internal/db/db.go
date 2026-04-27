@@ -27,9 +27,10 @@ const SYNC_INTERVAL = 100 * time.Millisecond
 type DatabaseVersion uint64
 
 type DatabaseHeader struct {
-	root       pager.PagePointer
-	version    DatabaseVersion
-	nextPageID pager.PagePointer
+	root        pager.PagePointer
+	version     DatabaseVersion
+	nextTableID TableID
+	nextPageID  pager.PagePointer
 }
 
 type Database struct {
@@ -170,26 +171,32 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	manager := newTableManager(
 		db.header.root,
 		db.pager.Fork(db.header.nextPageID, db.collectReleasedPages(latestUnreachableVersion)),
+		db.allocatedTableID,
 	)
 
 	abortedTransactions := make([]TransactionCommit, 0)
 	approvedTransactions := make([]TransactionCommit, 0)
 
+	var (
+		applyResult *ApplyResult
+		err         error
+	)
 	for _, transaction := range transactions {
-		if err := manager.applyChangeEvents(transaction.ChangeEvents); err != nil {
+		if applyResult, err = manager.applyChangeEvents(transaction.ChangeEvents); err != nil {
 			abortedTransactions = append(abortedTransactions, transaction)
 		} else {
 			approvedTransactions = append(approvedTransactions, transaction)
 		}
 	}
 
-	committedReleasedPages := manager.releasedPages()
-	reusablePages := manager.reusablePages()
+	committedReleasedPages := applyResult.ReleasedPages
+	reusablePages := applyResult.ReusablePages
 
 	newHeader := &DatabaseHeader{
-		root:       manager.root(),
-		version:    db.header.version + 1,
-		nextPageID: manager.totalPages(),
+		root:        applyResult.Root,
+		version:     db.header.version + 1,
+		nextTableID: db.header.nextTableID,
+		nextPageID:  applyResult.TotalPages,
 	}
 
 	if err := manager.commit(db.serializeHeader(newHeader)); err != nil {
@@ -243,9 +250,8 @@ func (db *Database) createTransaction(ctx context.Context) (*Transaction, error)
 	db.mu.RUnlock()
 
 	tx := &Transaction{
-		version: header.version,
-		manager: newTableManager(header.root, db.pager.Fork(header.nextPageID)),
-
+		version:     header.version,
+		manager:     newTableManager(header.root, db.pager.Fork(header.nextPageID), db.allocatedTableID),
 		commitQueue: db.commitQueue,
 		ctx:         ctx,
 	}
@@ -257,6 +263,15 @@ func (db *Database) createTransaction(ctx context.Context) (*Transaction, error)
 	db.mu.Unlock()
 
 	return tx, nil
+}
+
+func (db *Database) allocatedTableID() TableID {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	id := db.header.nextTableID
+	db.header.nextTableID++
+	return id
 }
 
 func (db *Database) collectReleasedPages(target DatabaseVersion) pager.PageList {
@@ -304,9 +319,10 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 
 	if helpers.IsZero(signature) {
 		return &DatabaseHeader{
-			root:       pager.NULL_PAGE,
-			version:    INITIAL_DB_VERSION,
-			nextPageID: 1, // Reserve 1 page for header
+			root:        pager.NULL_PAGE,
+			version:     INITIAL_DB_VERSION,
+			nextTableID: 1, // Reserve 1 table for @catalog table
+			nextPageID:  1, // Reserve 1 page for header
 		}, nil
 	}
 
@@ -317,9 +333,10 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 	signatureSize := len(DB_STORAGE_SIGNATURE)
 
 	header := &DatabaseHeader{
-		root:       pager.PagePointer(binary.LittleEndian.Uint64(headerBlock[signatureSize : signatureSize+8])),
-		version:    DatabaseVersion(binary.LittleEndian.Uint64(headerBlock[signatureSize+8 : signatureSize+16])),
-		nextPageID: pager.PagePointer(binary.LittleEndian.Uint64(headerBlock[signatureSize+16 : signatureSize+24])),
+		root:        pager.PagePointer(binary.LittleEndian.Uint64(headerBlock[signatureSize : signatureSize+8])),
+		version:     DatabaseVersion(binary.LittleEndian.Uint64(headerBlock[signatureSize+8 : signatureSize+16])),
+		nextTableID: TableID(binary.LittleEndian.Uint64(headerBlock[signatureSize+16 : signatureSize+24])),
+		nextPageID:  pager.PagePointer(binary.LittleEndian.Uint64(headerBlock[signatureSize+24 : signatureSize+32])),
 	}
 
 	return header, nil
@@ -332,13 +349,13 @@ func (db *Database) serializeHeader(header *DatabaseHeader) []byte {
 	copy(headerBlock[0:signatureSize], []byte(DB_STORAGE_SIGNATURE))
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize:signatureSize+8], uint64(header.root))
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize+8:signatureSize+16], uint64(header.version))
-	binary.LittleEndian.PutUint64(headerBlock[signatureSize+16:signatureSize+24], uint64(header.nextPageID))
+	binary.LittleEndian.PutUint64(headerBlock[signatureSize+16:signatureSize+24], uint64(header.nextTableID))
+	binary.LittleEndian.PutUint64(headerBlock[signatureSize+24:signatureSize+32], uint64(header.nextPageID))
 
 	return headerBlock
 }
 
 func (db *Database) init() error {
-
 	if db.empty() {
 		return db.initWAL()
 	} else {
@@ -367,8 +384,6 @@ func (db *Database) recoverFromWAL() error {
 		return fmt.Errorf("Database: failed to get latest database version from WAL: %w", err)
 	}
 
-	restoredVersion := DatabaseVersion(0)
-
 	freePages := pager.NewPageList()
 
 	// FreePages events stored in WAL at the beginning of the events list because they are written to WAL UpdateDBVersion event
@@ -380,24 +395,17 @@ func (db *Database) recoverFromWAL() error {
 		}
 	}
 
-	// After commit at the end of WAL we have events in the following order: Table changes -> CommitTransaction -> UpdateDBVersion
-	// We need to iterate over events in reverse order to get latest database version
-	for eventIdx := len(restoredEvents) - 1; eventIdx >= 0; eventIdx-- {
-		if event, ok := restoredEvents[eventIdx].(*events.UpdateDBVersion); ok {
-			restoredVersion = DatabaseVersion(event.Version)
-			break
-		}
-	}
+	manager := newTableManager(db.header.root, db.pager.Fork(db.header.nextPageID, freePages), db.allocatedTableID)
 
-	manager := newTableManager(db.header.root, db.pager.Fork(db.header.nextPageID, freePages))
-
-	if err := manager.applyChangeEvents(restoredEvents); err != nil {
+	applyResult, err := manager.applyChangeEvents(restoredEvents)
+	if err != nil {
 		return fmt.Errorf("Database: failed to apply events from WAL: %w", err)
 	}
 
-	db.header.version = restoredVersion
-	db.header.root = manager.root()
-	db.header.nextPageID = manager.totalPages()
+	db.header.version = applyResult.DBVersion
+	db.header.nextTableID = applyResult.LastCreatedTable + 1
+	db.header.nextPageID = applyResult.TotalPages
+	db.header.root = applyResult.Root
 
 	if err := manager.commit(db.serializeHeader(db.header)); err != nil {
 		return fmt.Errorf("Database: failed to commit restored state: %w", err)

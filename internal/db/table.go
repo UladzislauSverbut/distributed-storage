@@ -14,6 +14,15 @@ import (
 const PRIMARY_INDEX_ID int = 0 // Primary index id, secondary indexes ids start from 1
 const INDEX_ID_SIZE int = 4    // Size of index section id in bytes
 
+const (
+	TABLE_ACTIVE TableState = iota
+	TABLE_DROPPING
+	TABLE_DROPPED
+)
+
+type TableID uint64
+type TableState uint32
+
 type TableSchema struct {
 	Name             string
 	PrimaryIndex     []string
@@ -22,14 +31,20 @@ type TableSchema struct {
 }
 
 type Table struct {
+	id    TableID
+	state TableState
+
 	kv           *kv.KeyValue
 	schema       *TableSchema
 	changeEvents []TableEvent
 }
 
-func newTable(root pager.PagePointer, pager *pager.Pager, schema *TableSchema) (*Table, error) {
+func newTable(id TableID, root pager.PagePointer, pager *pager.Pager, schema *TableSchema) (*Table, error) {
 	kv := kv.NewKeyValue(root, pager)
 	table := &Table{
+		id:    id,
+		state: TABLE_ACTIVE,
+
 		kv:           kv,
 		schema:       schema,
 		changeEvents: []TableEvent{},
@@ -106,7 +121,7 @@ func (table *Table) Delete(query *vals.Object) (*vals.Object, error) {
 	if response, err := table.kv.Delete(&kv.DeleteRequest{Key: index}); err != nil {
 		return nil, err
 	} else {
-		table.changeEvents = append(table.changeEvents, events.NewDeleteEntry(table.schema.Name, index, response.OldValue))
+		table.changeEvents = append(table.changeEvents, events.NewDeleteEntry(uint64(table.id), index, response.OldValue))
 
 		return table.decodePayload(response.OldValue), nil
 	}
@@ -135,7 +150,7 @@ func (table *Table) Insert(record *vals.Object) error {
 		return err
 	}
 
-	table.changeEvents = append(table.changeEvents, events.NewInsertEntry(table.schema.Name, index, value))
+	table.changeEvents = append(table.changeEvents, events.NewInsertEntry(uint64(table.id), index, value))
 
 	return nil
 }
@@ -167,7 +182,7 @@ func (table *Table) Update(record *vals.Object) (*vals.Object, error) {
 		return nil, err
 	}
 
-	table.changeEvents = append(table.changeEvents, events.NewUpdateEntry(table.schema.Name, index, response.Value, newValue))
+	table.changeEvents = append(table.changeEvents, events.NewUpdateEntry(uint64(table.id), index, response.Value, newValue))
 
 	return table.decodePayload(response.Value), nil
 }
@@ -196,20 +211,43 @@ func (table *Table) Upsert(record *vals.Object) (*vals.Object, error) {
 			return nil, err
 		}
 
-		table.changeEvents = append(table.changeEvents, events.NewInsertEntry(table.schema.Name, index, newValue))
+		table.changeEvents = append(table.changeEvents, events.NewInsertEntry(uint64(table.id), index, newValue))
 	} else {
 		if err := table.updateSecondaryIndexes(record, table.decodePayload(response.Value)); err != nil {
 			return nil, err
 		}
 
-		table.changeEvents = append(table.changeEvents, events.NewUpdateEntry(table.schema.Name, index, response.Value, newValue))
+		table.changeEvents = append(table.changeEvents, events.NewUpdateEntry(uint64(table.id), index, response.Value, newValue))
 	}
 
 	return table.decodePayload(response.Value), nil
 }
 
+func (table *Table) Patch(query *vals.Object, patch *vals.Object) ([]*vals.Object, error) {
+	if len(patch.GetMany(table.schema.PrimaryIndex)) > 0 {
+		return nil, fmt.Errorf("Table: can't patch record because patch contains primary index columns: %s", patch)
+	}
+
+	records, err := table.Find(query)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, record := range records {
+		if _, err := table.Update(record.Merge(patch)); err != nil {
+			return nil, err
+		}
+	}
+
+	return records, nil
+}
+
 func (table *Table) Root() pager.PagePointer {
 	return table.kv.Root()
+}
+
+func (table *Table) ID() TableID {
+	return table.id
 }
 
 func (table *Table) Name() string {
@@ -232,7 +270,7 @@ func (table *Table) createSecondaryIndexes(record *vals.Object) error {
 				return err
 			}
 
-			table.changeEvents = append(table.changeEvents, events.NewInsertEntry(table.schema.Name, secondaryIndex, nil))
+			table.changeEvents = append(table.changeEvents, events.NewInsertEntry(uint64(table.id), secondaryIndex, nil))
 		}
 	}
 
@@ -254,7 +292,7 @@ func (table *Table) updateSecondaryIndexes(record *vals.Object, oldRecord *vals.
 				return err
 			}
 
-			table.changeEvents = append(table.changeEvents, events.NewDeleteEntry(table.schema.Name, oldSecondaryIndex, nil))
+			table.changeEvents = append(table.changeEvents, events.NewDeleteEntry(uint64(table.id), oldSecondaryIndex, nil))
 		}
 
 		if secondaryIndex != nil && primaryIndexChanged {
@@ -262,7 +300,7 @@ func (table *Table) updateSecondaryIndexes(record *vals.Object, oldRecord *vals.
 				return err
 			}
 
-			table.changeEvents = append(table.changeEvents, events.NewInsertEntry(table.schema.Name, secondaryIndex, nil))
+			table.changeEvents = append(table.changeEvents, events.NewInsertEntry(uint64(table.id), secondaryIndex, nil))
 		}
 	}
 

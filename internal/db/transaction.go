@@ -21,10 +21,9 @@ type TransactionCommitResponse struct {
 }
 
 type Transaction struct {
-	version DatabaseVersion
-	state   atomic.Int32 // It's reference to TransactionState but with atomic operations support
-	manager *TableManager
-
+	version     DatabaseVersion
+	state       atomic.Int32 // It's reference to TransactionState but with atomic operations support
+	manager     *TableManager
 	commitQueue chan<- TransactionCommit
 	ctx         context.Context
 }
