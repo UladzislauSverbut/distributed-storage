@@ -11,6 +11,10 @@ type Cursor struct {
 }
 
 func (cursor *Cursor) Current() ([]byte, []byte) {
+	if cursor.Empty() {
+		return nil, nil
+	}
+
 	path := cursor.path[len(cursor.path)-1]
 	parent := path.parent
 	position := path.position
@@ -51,6 +55,10 @@ func (cursor *Cursor) Prev() ([]byte, []byte) {
 }
 
 func (cursor *Cursor) HasNext() bool {
+	if cursor.Empty() {
+		return false
+	}
+
 	for pathIndex := len(cursor.path) - 1; pathIndex >= 0; pathIndex-- {
 		nodePosition := cursor.path[pathIndex]
 
@@ -62,6 +70,10 @@ func (cursor *Cursor) HasNext() bool {
 }
 
 func (cursor *Cursor) HasPrev() bool {
+	if cursor.Empty() {
+		return false
+	}
+
 	for pathIndex := len(cursor.path) - 1; pathIndex >= 0; pathIndex-- {
 		nodePosition := cursor.path[pathIndex]
 
@@ -70,6 +82,10 @@ func (cursor *Cursor) HasPrev() bool {
 		}
 	}
 	return false
+}
+
+func (cursor *Cursor) Empty() bool {
+	return cursor == nil || len(cursor.path) == 0
 }
 
 func (cursor *Cursor) getCurrentParent() (*Node, NodeKeyPosition) {

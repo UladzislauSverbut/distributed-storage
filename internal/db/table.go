@@ -72,10 +72,14 @@ func (table *Table) Get(query *vals.Object) (*vals.Object, error) {
 }
 
 func (table *Table) Find(query *vals.Object) ([]*vals.Object, error) {
+	records := make([]*vals.Object, 0)
+
 	partialIndex, isPrimary := table.getPartialIndex(query)
 	cursor := table.kv.Scan(&kv.ScanRequest{Key: partialIndex})
 
-	records := make([]*vals.Object, 0)
+	if cursor.Empty() {
+		return records, nil
+	}
 
 	if isPrimary {
 		for index, value := cursor.Current(); table.matchIndexes(index, partialIndex); index, value = cursor.Next() {
@@ -97,9 +101,12 @@ func (table *Table) Find(query *vals.Object) ([]*vals.Object, error) {
 }
 
 func (table *Table) GetAll() []*vals.Object {
+	records := make([]*vals.Object, 0)
 	cursor := table.kv.Scan(&kv.ScanRequest{})
 
-	records := make([]*vals.Object, 0)
+	if cursor.Empty() {
+		return records
+	}
 
 	for index, value := cursor.Current(); value != nil; index, value = cursor.Next() {
 

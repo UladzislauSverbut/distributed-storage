@@ -32,6 +32,7 @@ type ScanRequest struct {
 }
 
 type ScanResponse interface {
+	Empty() bool
 	Current() ([]byte, []byte)
 	Next() ([]byte, []byte)
 	Prev() ([]byte, []byte)
