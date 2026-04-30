@@ -356,6 +356,7 @@ func (manager *TableManager) buildTableQueryByID(id TableID) *vals.Object {
 
 func (manager *TableManager) decodeTable(record *vals.Object) *Table {
 	id := TableID(record.GetUint64("id"))
+	state := TableState(record.GetUint32("state"))
 	definition := record.GetString("definition")
 	root := record.GetUint64("root")
 
@@ -363,6 +364,8 @@ func (manager *TableManager) decodeTable(record *vals.Object) *Table {
 	json.Unmarshal([]byte(definition), schema)
 
 	table, _ := newTable(id, root, manager.pager, schema)
+	table.state = state
+
 	return table
 }
 
@@ -372,6 +375,7 @@ func (manager *TableManager) encodeTable(table *Table) *vals.Object {
 	return vals.NewObject().
 		Set("id", vals.NewUint64(uint64(table.id))).
 		Set("name", vals.NewString(table.schema.Name)).
+		Set("state", vals.NewUint32(uint32(TABLE_ACTIVE))).
 		Set("definition", vals.NewString(string(stringifiedSchema))).
 		Set("root", vals.NewUint64(table.Root()))
 }

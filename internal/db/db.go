@@ -376,9 +376,6 @@ func (db *Database) initWAL() error {
 }
 
 func (db *Database) recoverFromWAL() error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
 	restoredEvents, err := db.wal.eventsSince(db.header.version)
 	if err != nil {
 		return fmt.Errorf("Database: failed to get latest database version from WAL: %w", err)
