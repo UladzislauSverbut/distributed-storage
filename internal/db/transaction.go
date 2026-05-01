@@ -22,17 +22,18 @@ type TransactionCommitResponse struct {
 
 type Transaction struct {
 	version     DatabaseVersion
-	state       atomic.Int32 // It's reference to TransactionState but with atomic operations support
+	state       *atomic.Int32 // It's reference to TransactionState but with atomic operations support
+	nextTableID *atomic.Int64 // It's reference to TableID but with atomic operations support
 	manager     *TableManager
 	commitQueue chan<- TransactionCommit
 	ctx         context.Context
 }
 
 const (
-	PROCESSING TransactionState = iota
-	COMMITTING
-	COMMITTED
-	ABORTED
+	TRANSACTION_PROCESSING TransactionState = iota
+	TRANSACTION_COMMITTING
+	TRANSACTION_COMMITTED
+	TRANSACTION_ABORTED
 )
 
 func NewTransaction(db *Database, ctx context.Context) (*Transaction, error) {
@@ -105,7 +106,7 @@ func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because it already exist", schema.Name)
 	}
 
-	table, err = tx.manager.createTable(schema)
+	table, err = tx.manager.createTable(TableID(tx.nextTableID.Add(1)), schema)
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because of error during creating table: %w", schema.Name, err)
 	}
@@ -116,30 +117,30 @@ func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
 func (tx *Transaction) IsActive() bool {
 	state := TransactionState(tx.state.Load())
 
-	return state == PROCESSING || state == COMMITTING
+	return state == TRANSACTION_PROCESSING || state == TRANSACTION_COMMITTING
 }
 
 func (tx *Transaction) setCommitting() bool {
 
-	if TransactionState(tx.state.Load()) != PROCESSING {
+	if TransactionState(tx.state.Load()) != TRANSACTION_PROCESSING {
 		return false
 	}
 
-	return tx.state.CompareAndSwap(int32(PROCESSING), int32(COMMITTING))
+	return tx.state.CompareAndSwap(int32(TRANSACTION_PROCESSING), int32(TRANSACTION_COMMITTING))
 }
 
 func (tx *Transaction) setCommitted() bool {
-	if TransactionState(tx.state.Load()) != COMMITTING {
+	if TransactionState(tx.state.Load()) != TRANSACTION_COMMITTING {
 		return false
 	}
 
-	return tx.state.CompareAndSwap(int32(COMMITTING), int32(COMMITTED))
+	return tx.state.CompareAndSwap(int32(TRANSACTION_COMMITTING), int32(TRANSACTION_COMMITTED))
 }
 
 func (tx *Transaction) setAborted() bool {
-	if state := TransactionState(tx.state.Load()); state != COMMITTING {
+	if state := TransactionState(tx.state.Load()); state != TRANSACTION_COMMITTING {
 		return false
 	}
 
-	return tx.state.CompareAndSwap(int32(COMMITTING), int32(ABORTED))
+	return tx.state.CompareAndSwap(int32(TRANSACTION_COMMITTING), int32(TRANSACTION_ABORTED))
 }

@@ -34,19 +34,17 @@ type TableManager struct {
 	catalog      *Table
 	loadedTables map[TableID]*Table
 
-	pager       *pager.Pager
-	nextTableID func() TableID
+	pager *pager.Pager
 }
 
-func newTableManager(root pager.PagePointer, pager *pager.Pager, nextTableID func() TableID) *TableManager {
+func newTableManager(root pager.PagePointer, pager *pager.Pager) *TableManager {
 	catalog, _ := newTable(0, root, pager, &catalogSchema)
 
 	return &TableManager{
 		catalog:      catalog,
 		loadedTables: make(map[TableID]*Table),
 
-		pager:       pager,
-		nextTableID: nextTableID,
+		pager: pager,
 	}
 }
 
@@ -112,7 +110,7 @@ func (manager *TableManager) updateTable(table *Table) error {
 	return nil
 }
 
-func (manager *TableManager) createTable(schema *TableSchema) (*Table, error) {
+func (manager *TableManager) createTable(id TableID, schema *TableSchema) (*Table, error) {
 	table, err := manager.table(schema.Name)
 	if err != nil {
 		return nil, fmt.Errorf("Catalog: couldn't check if table %s already exists: %w", schema.Name, err)
@@ -122,7 +120,7 @@ func (manager *TableManager) createTable(schema *TableSchema) (*Table, error) {
 		return nil, fmt.Errorf("Catalog: couldn't create table %s because it already exists", schema.Name)
 	}
 
-	table, err = newTable(manager.nextTableID(), pager.NULL_PAGE, manager.pager, schema)
+	table, err = newTable(id, pager.NULL_PAGE, manager.pager, schema)
 	if err != nil {
 		return nil, fmt.Errorf("Catalog: couldn't create table %s: %w", schema.Name, err)
 	}
@@ -174,6 +172,8 @@ func (manager *TableManager) changeEvents() []TableEvent {
 }
 
 func (manager *TableManager) applyChangeEvents(changeEvents []TableEvent) (result *ApplyResult, err error) {
+	result = &ApplyResult{}
+
 	previousRoot := manager.catalog.Root()
 	snapshot := manager.pager.Snapshot()
 
@@ -263,7 +263,7 @@ func (manager *TableManager) applyCreateTableEvent(event *events.CreateTable) er
 		return fmt.Errorf("CreateTable Apply: couldn't parse schema: %w", err)
 	}
 
-	if _, err := manager.createTable(schema); err != nil {
+	if _, err := manager.createTable(TableID(event.TableID), schema); err != nil {
 		return fmt.Errorf("CreateTable Apply: %w", err)
 	}
 
