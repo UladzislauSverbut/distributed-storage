@@ -118,16 +118,16 @@ func (list PageList) addInterval(interval PageInterval) {
 			return
 		}
 
-		if current.Start > interval.End {
+		if interval.Start > current.End {
 			continue
 		}
 
-		if current.Start < interval.Start {
-			interval.Start = current.Start
+		if current.Start > interval.Start {
+			current.Start = interval.Start
 		}
 
-		if current.End > interval.End {
-			interval.End = current.End
+		if current.End < interval.End {
+			current.End = interval.End
 		}
 
 		list.tryMerge(el)
