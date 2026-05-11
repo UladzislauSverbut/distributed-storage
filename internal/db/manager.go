@@ -12,6 +12,7 @@ import (
 
 const HEADER_SIZE = len(DB_STORAGE_SIGNATURE) + 32
 const HEADER_PAGE = pager.PagePointer(0)
+const CATALOG_TABLE_ID = TableID(0)
 
 var catalogSchema = TableSchema{
 	Name:             "@catalog",
@@ -22,7 +23,7 @@ var catalogSchema = TableSchema{
 
 type ApplyResult struct {
 	Root             pager.PagePointer
-	DBVersion        DatabaseVersion
+	DatabaseVersion  DatabaseVersion
 	LastCreatedTable TableID
 
 	TotalPages    uint64
@@ -38,7 +39,7 @@ type TableManager struct {
 }
 
 func newTableManager(root pager.PagePointer, pager *pager.Pager) *TableManager {
-	catalog, _ := newTable(0, root, pager, &catalogSchema)
+	catalog, _ := newTable(CATALOG_TABLE_ID, root, pager, &catalogSchema)
 
 	return &TableManager{
 		catalog:      catalog,
@@ -48,7 +49,7 @@ func newTableManager(root pager.PagePointer, pager *pager.Pager) *TableManager {
 	}
 }
 
-func (manager *TableManager) table(name string) (*Table, error) {
+func (manager *TableManager) Table(name string) (*Table, error) {
 	for _, table := range manager.loadedTables {
 		if table.schema.Name == name {
 			return table, nil
@@ -71,7 +72,7 @@ func (manager *TableManager) table(name string) (*Table, error) {
 	return table, nil
 }
 
-func (manager *TableManager) tableByID(id TableID) (*Table, error) {
+func (manager *TableManager) TableByID(id TableID) (*Table, error) {
 	if table, ok := manager.loadedTables[id]; ok {
 		return table, nil
 	}
@@ -91,7 +92,7 @@ func (manager *TableManager) tableByID(id TableID) (*Table, error) {
 	return table, nil
 }
 
-func (manager *TableManager) updateTable(table *Table) error {
+func (manager *TableManager) UpdateTable(table *Table) error {
 	record := manager.encodeTable(table)
 
 	oldRecord, err := manager.catalog.Update(record)
@@ -110,8 +111,8 @@ func (manager *TableManager) updateTable(table *Table) error {
 	return nil
 }
 
-func (manager *TableManager) createTable(id TableID, schema *TableSchema) (*Table, error) {
-	table, err := manager.table(schema.Name)
+func (manager *TableManager) CreateTable(id TableID, schema *TableSchema) (*Table, error) {
+	table, err := manager.Table(schema.Name)
 	if err != nil {
 		return nil, fmt.Errorf("Catalog: couldn't check if table %s already exists: %w", schema.Name, err)
 	}
@@ -140,7 +141,7 @@ func (manager *TableManager) createTable(id TableID, schema *TableSchema) (*Tabl
 	return table, nil
 }
 
-func (manager *TableManager) deleteTable(name string) error {
+func (manager *TableManager) DeleteTable(name string) error {
 	res, err := manager.catalog.Patch(manager.buildTableQueryByName(name), vals.NewObject().Set("state", vals.NewUint32(uint32(TABLE_DROPPING))))
 	if err != nil {
 		return fmt.Errorf("Catalog: couldn't delete table %s from catalog: %w", name, err)
@@ -158,7 +159,7 @@ func (manager *TableManager) deleteTable(name string) error {
 	return nil
 }
 
-func (manager *TableManager) changeEvents() []TableEvent {
+func (manager *TableManager) ChangeEvents() []TableEvent {
 	events := make([]TableEvent, 0)
 
 	for _, table := range manager.loadedTables {
@@ -171,87 +172,90 @@ func (manager *TableManager) changeEvents() []TableEvent {
 	return events
 }
 
-func (manager *TableManager) applyChangeEvents(changeEvents []TableEvent) (result *ApplyResult, err error) {
-	result = &ApplyResult{}
-
-	previousRoot := manager.catalog.Root()
+func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (res ApplyResult, err error) {
+	root := manager.catalog.Root()
 	snapshot := manager.pager.Snapshot()
 
 	defer func() {
 		if err != nil {
 			manager.pager.Restore(snapshot)
-			manager.catalog, _ = newTable(0, previousRoot, manager.pager, &catalogSchema) // In case of error we restore previous catalog state
-			manager.loadedTables = make(map[TableID]*Table)                               //In case of error we discard all cached tables
+			manager.catalog, _ = newTable(CATALOG_TABLE_ID, root, manager.pager, &catalogSchema) // In case of error we restore previous catalog state
+			manager.loadedTables = make(map[TableID]*Table)                                      //In case of error we discard all cached tables
 		}
 
-		result.Root = manager.catalog.Root()
-		result.TotalPages = manager.pager.TotalPages()
-		result.ReleasedPages = manager.pager.ReleasedPages()
-		result.ReusablePages = manager.pager.ReusablePages()
+		res.Root = root
+		res.ReleasedPages = manager.pager.ReleasedPages()
+		res.ReusablePages = manager.pager.ReusablePages()
+		res.TotalPages = manager.pager.TotalPages()
 	}()
 
 	for _, changeEvent := range changeEvents {
 		switch event := changeEvent.(type) {
+		case *events.UpdateDBVersion:
+			res.DatabaseVersion = DatabaseVersion(event.Version)
+
 		case *events.CreateTable:
 			if err = manager.applyCreateTableEvent(event); err != nil {
-				return result, err
+				return
 			}
-			result.LastCreatedTable = TableID(event.TableID)
+			res.LastCreatedTable = TableID(event.TableID)
 
 		case *events.DeleteTable:
 			if err = manager.applyDeleteTableEvent(event); err != nil {
-				return result, err
+				return
 			}
 
 		case *events.DeleteEntry:
 			if err = manager.applyDeleteEntryEvent(event); err != nil {
-				return result, err
+				return
 			}
 
 		case *events.UpdateEntry:
 			if err = manager.applyUpdateEntryEvent(event); err != nil {
-				return result, err
+				return
 			}
 
 		case *events.InsertEntry:
 			if err = manager.applyInsertEntryEvent(event); err != nil {
-				return result, err
+				return
 			}
-
-		case *events.UpdateDBVersion:
-			result.DBVersion = DatabaseVersion(event.Version)
 
 		case *events.StartTransaction,
 			*events.CommitTransaction,
 			*events.FreePages:
 			// These events are not related to table schema or entries, so we can ignore them during replay
-			continue
 
 		default:
-			return result, fmt.Errorf("Catalog: couldn't apply unknown event %s", event.Name())
+			err = fmt.Errorf("Catalog: couldn't apply unknown event %s", event.Name())
+			return
 		}
+
+		root = manager.catalog.Root()       // We update root after each event because some events can change catalog root and we need to keep track of it to be able to restore state in case of error
+		snapshot = manager.pager.Snapshot() // We update snapshot after each event because some events can change pager state and we need to keep track of it to be able to restore state in case of error
 	}
 
-	return result, manager.saveChanges()
+	err = manager.saveChanges()
+
+	return
 }
 
-func (manager *TableManager) saveChanges() error {
-	// We only need to update tables that were changed
-	for _, table := range manager.loadedTables {
-		if err := manager.updateTable(table); err != nil {
-			return fmt.Errorf("Catalog: couldn't write table %s: %w", table.schema.Name, err)
-		}
-	}
-
-	return nil
-}
-
-func (manager *TableManager) commit(headerData []byte) error {
+func (manager *TableManager) Commit(headerData []byte) error {
 	if err := manager.pager.UpdatePage(HEADER_PAGE, headerData); err != nil {
 		return fmt.Errorf("TableManager: failed to update header page: %w", err)
 	}
 	if err := manager.pager.SaveChanges(); err != nil {
 		return fmt.Errorf("TableManager: failed to save changes: %w", err)
+	}
+
+	return nil
+}
+
+func (manager *TableManager) saveChanges() error {
+	// We only need to update tables that were changed
+	for _, table := range manager.loadedTables {
+		if err := manager.UpdateTable(table); err != nil {
+			return fmt.Errorf("Catalog: couldn't write table %s: %w", table.schema.Name, err)
+		}
 	}
 
 	return nil
@@ -263,7 +267,7 @@ func (manager *TableManager) applyCreateTableEvent(event *events.CreateTable) er
 		return fmt.Errorf("CreateTable Apply: couldn't parse schema: %w", err)
 	}
 
-	if _, err := manager.createTable(TableID(event.TableID), schema); err != nil {
+	if _, err := manager.CreateTable(TableID(event.TableID), schema); err != nil {
 		return fmt.Errorf("CreateTable Apply: %w", err)
 	}
 
@@ -271,7 +275,7 @@ func (manager *TableManager) applyCreateTableEvent(event *events.CreateTable) er
 }
 
 func (manager *TableManager) applyDeleteTableEvent(event *events.DeleteTable) error {
-	table, err := manager.tableByID(TableID(event.TableID))
+	table, err := manager.TableByID(TableID(event.TableID))
 	if err != nil {
 		return fmt.Errorf("DeleteTable Apply: %w", err)
 	}
@@ -279,7 +283,7 @@ func (manager *TableManager) applyDeleteTableEvent(event *events.DeleteTable) er
 		return fmt.Errorf("DeleteTable Apply: table with ID %d not found", event.TableID)
 	}
 
-	if err := manager.deleteTable(table.schema.Name); err != nil {
+	if err := manager.DeleteTable(table.schema.Name); err != nil {
 		return fmt.Errorf("DeleteTable Apply: %w", err)
 	}
 
@@ -287,7 +291,7 @@ func (manager *TableManager) applyDeleteTableEvent(event *events.DeleteTable) er
 }
 
 func (manager *TableManager) applyDeleteEntryEvent(event *events.DeleteEntry) error {
-	table, err := manager.tableByID(TableID(event.TableID))
+	table, err := manager.TableByID(TableID(event.TableID))
 	if err != nil {
 		return fmt.Errorf("DeleteEntry Apply: %w", err)
 	}
@@ -307,7 +311,7 @@ func (manager *TableManager) applyDeleteEntryEvent(event *events.DeleteEntry) er
 }
 
 func (manager *TableManager) applyUpdateEntryEvent(event *events.UpdateEntry) error {
-	table, err := manager.tableByID(TableID(event.TableID))
+	table, err := manager.TableByID(TableID(event.TableID))
 	if err != nil {
 		return fmt.Errorf("UpdateEntry Apply: %w", err)
 	}
@@ -327,7 +331,7 @@ func (manager *TableManager) applyUpdateEntryEvent(event *events.UpdateEntry) er
 }
 
 func (manager *TableManager) applyInsertEntryEvent(event *events.InsertEntry) error {
-	table, err := manager.tableByID(TableID(event.TableID))
+	table, err := manager.TableByID(TableID(event.TableID))
 	if err != nil {
 		return fmt.Errorf("InsertEntry Apply: %w", err)
 	}

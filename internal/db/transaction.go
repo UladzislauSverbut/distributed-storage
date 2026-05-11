@@ -54,7 +54,7 @@ func (tx *Transaction) Commit() (err error) {
 	}
 
 	// If there is nothing to write, then just return
-	if len(tx.manager.changeEvents()) == 0 {
+	if len(tx.manager.ChangeEvents()) == 0 {
 		tx.setCommitted()
 		return nil
 	}
@@ -64,7 +64,7 @@ func (tx *Transaction) Commit() (err error) {
 
 	tx.commitQueue <- TransactionCommit{
 		DatabaseVersion: tx.version,
-		ChangeEvents:    tx.manager.changeEvents(),
+		ChangeEvents:    tx.manager.ChangeEvents(),
 		Response:        responseChannel,
 	}
 
@@ -88,7 +88,7 @@ func (tx *Transaction) Rollback() {
 }
 
 func (tx *Transaction) Table(tableName string) (*Table, error) {
-	table, err := tx.manager.table(tableName)
+	table, err := tx.manager.Table(tableName)
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't get table %s: %w", tableName, err)
 	}
@@ -97,7 +97,7 @@ func (tx *Transaction) Table(tableName string) (*Table, error) {
 }
 
 func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
-	table, err := tx.manager.table(schema.Name)
+	table, err := tx.manager.Table(schema.Name)
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because of error during getting table: %w", schema.Name, err)
 	}
@@ -106,7 +106,7 @@ func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because it already exist", schema.Name)
 	}
 
-	table, err = tx.manager.createTable(TableID(tx.nextTableID.Add(1)), schema)
+	table, err = tx.manager.CreateTable(TableID(tx.nextTableID.Add(1)), schema)
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because of error during creating table: %w", schema.Name, err)
 	}

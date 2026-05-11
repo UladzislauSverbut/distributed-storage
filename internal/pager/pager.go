@@ -14,7 +14,7 @@ type PagerConfig struct {
 }
 
 type PagerState struct {
-	NextPageID     PagePointer            // ID of the next page that will be created
+	NextPageID     PagePointer            //ID of the next page that will be created
 	AvailablePages PageList               // List  of pages that are not reachable by others and could be mutated
 	ReusablePages  PageList               // List of pages that can be reused by others
 	ReleasedPages  PageList               // List of pages that were released and cannot be overwritten due to immutability

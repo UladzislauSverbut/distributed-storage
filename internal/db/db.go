@@ -179,11 +179,11 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	approvedTransactions := make([]TransactionCommit, 0)
 
 	var (
-		applyResult *ApplyResult
+		applyResult ApplyResult
 		err         error
 	)
 	for _, transaction := range transactions {
-		if applyResult, err = manager.applyChangeEvents(transaction.ChangeEvents); err != nil {
+		if applyResult, err = manager.ApplyChangeEvents(transaction.ChangeEvents); err != nil {
 			abortedTransactions = append(abortedTransactions, transaction)
 		} else {
 			approvedTransactions = append(approvedTransactions, transaction)
@@ -200,7 +200,7 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 		nextPageID:  applyResult.TotalPages,
 	}
 
-	if err := manager.commit(db.serializeHeader(newHeader)); err != nil {
+	if err := manager.Commit(db.serializeHeader(newHeader)); err != nil {
 		db.rejectTransactions(transactions, fmt.Errorf("Database: failed to commit changes: %w", err))
 		return
 	}
@@ -288,9 +288,6 @@ func (db *Database) releasePages(version DatabaseVersion, list pager.PageList) {
 }
 
 func (db *Database) latestUnreachableVersion() DatabaseVersion {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
 	for {
 		version, transactions, ok := db.transactions.PeekMin()
 		if !ok {
@@ -386,19 +383,19 @@ func (db *Database) recoverFromWAL() error {
 		}
 	}
 
-	manager := newTableManager(db.header.root, db.pager.Fork(db.header.nextPageID, freePages))
+	manager := db.tableManager(freePages)
 
-	applyResult, err := manager.applyChangeEvents(restoredEvents)
+	applyResult, err := manager.ApplyChangeEvents(restoredEvents)
 	if err != nil {
 		return fmt.Errorf("Database: failed to apply events from WAL: %w", err)
 	}
 
 	db.header.root = applyResult.Root
-	db.header.version = applyResult.DBVersion
+	db.header.version = applyResult.DatabaseVersion
 	db.header.nextPageID = applyResult.TotalPages
 	db.nextTableID.Store(uint64(applyResult.LastCreatedTable + 1))
 
-	if err := manager.commit(db.serializeHeader(db.header)); err != nil {
+	if err := manager.Commit(db.serializeHeader(db.header)); err != nil {
 		return fmt.Errorf("Database: failed to commit restored state: %w", err)
 	}
 
@@ -409,6 +406,10 @@ func (db *Database) recoverFromWAL() error {
 	db.syncedVersion = db.header.version
 
 	return nil
+}
+
+func (db *Database) tableManager(freePages ...pager.PageList) *TableManager {
+	return newTableManager(db.header.root, db.pager.Fork(db.header.nextPageID, freePages...))
 }
 
 func (db *Database) empty() bool {
