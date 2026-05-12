@@ -30,9 +30,11 @@ type DatabaseVersion uint64
 type DatabaseHeader struct {
 	root        pager.PagePointer
 	version     DatabaseVersion
-	nextTableID *atomic.Int64
-	nextPageID  pager.PagePointer
+	tablesCount uint64
+	pagesCount  uint64
 }
+
+type TableIDAllocator func() TableID
 
 type Database struct {
 	header        *DatabaseHeader
@@ -86,7 +88,7 @@ func NewDatabase(config DatabaseConfig) (*Database, error) {
 		return nil, fmt.Errorf("Database: failed to read header: %w", err)
 	}
 
-	db.pager = pager.NewPager(db.storage, db.header.nextPageID, db.config.PageSize)
+	db.pager = pager.NewPager(db.storage, db.header.pagesCount, db.config.PageSize)
 
 	if db.wal, err = newWAL(config); err != nil {
 		return nil, fmt.Errorf("Database: failed to initialize WAL: %w", err)
@@ -169,11 +171,7 @@ func (db *Database) runSyncLoop() {
 
 func (db *Database) commitBatch(transactions []TransactionCommit) {
 	latestUnreachableVersion := db.latestUnreachableVersion()
-
-	manager := newTableManager(
-		db.header.root,
-		db.pager.Fork(db.header.nextPageID, db.collectReleasedPages(latestUnreachableVersion)),
-	)
+	manager := db.tableManager(db.collectReleasedPages(latestUnreachableVersion))
 
 	abortedTransactions := make([]TransactionCommit, 0)
 	approvedTransactions := make([]TransactionCommit, 0)
@@ -196,8 +194,8 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	newHeader := &DatabaseHeader{
 		root:        applyResult.Root,
 		version:     db.header.version + 1,
-		nextTableID: db.header.nextTableID,
-		nextPageID:  applyResult.TotalPages,
+		pagesCount:  applyResult.PagesCount,
+		tablesCount: applyResult.TablesCount,
 	}
 
 	if err := manager.Commit(db.serializeHeader(newHeader)); err != nil {
@@ -246,15 +244,10 @@ func (db *Database) approveTransactions(transactions []TransactionCommit) {
 }
 
 func (db *Database) createTransaction(ctx context.Context) (*Transaction, error) {
-	db.mu.RLock()
-	header := db.header
-	db.mu.RUnlock()
+	manager := db.tableManager()
 
 	tx := &Transaction{
-		version:     header.version,
-		nextTableID: header.nextTableID,
-		state:       new(atomic.Int32),
-		manager:     newTableManager(header.root, db.pager.Fork(header.nextPageID)),
+		manager:     manager,
 		commitQueue: db.commitQueue,
 		ctx:         ctx,
 	}
@@ -262,7 +255,7 @@ func (db *Database) createTransaction(ctx context.Context) (*Transaction, error)
 	tx.state.Store(int32(TRANSACTION_PROCESSING))
 
 	db.mu.Lock()
-	db.transactions.Add(tx.version, tx)
+	db.transactions.Add(manager.state.Version, tx)
 	db.mu.Unlock()
 
 	return tx, nil
@@ -288,6 +281,9 @@ func (db *Database) releasePages(version DatabaseVersion, list pager.PageList) {
 }
 
 func (db *Database) latestUnreachableVersion() DatabaseVersion {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	for {
 		version, transactions, ok := db.transactions.PeekMin()
 		if !ok {
@@ -311,8 +307,8 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 	header := &DatabaseHeader{
 		root:        pager.NULL_PAGE,
 		version:     INITIAL_DB_VERSION,
-		nextPageID:  1,                 // Reserve 1 page for header
-		nextTableID: new(atomic.Int64), // Reserve 0 table for @catalog table
+		pagesCount:  1, // Reserve 1 page for header
+		tablesCount: 1, // Reserve 0 table for @catalog table
 	}
 
 	if helpers.IsZero(signature) {
@@ -327,8 +323,8 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 
 	header.root = pager.PagePointer(binary.LittleEndian.Uint64(headerBlock[signatureSize : signatureSize+8]))
 	header.version = DatabaseVersion(binary.LittleEndian.Uint64(headerBlock[signatureSize+8 : signatureSize+16]))
-	header.nextPageID = pager.PagePointer(binary.LittleEndian.Uint64(headerBlock[signatureSize+16 : signatureSize+24]))
-	header.nextTableID.Store(int64(binary.LittleEndian.Uint64(headerBlock[signatureSize+24 : signatureSize+32])))
+	header.pagesCount = binary.LittleEndian.Uint64(headerBlock[signatureSize+16 : signatureSize+24])
+	header.tablesCount = binary.LittleEndian.Uint64(headerBlock[signatureSize+24 : signatureSize+32])
 
 	return header, nil
 }
@@ -340,8 +336,8 @@ func (db *Database) serializeHeader(header *DatabaseHeader) []byte {
 	copy(headerBlock[0:signatureSize], []byte(DB_STORAGE_SIGNATURE))
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize:signatureSize+8], uint64(header.root))
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize+8:signatureSize+16], uint64(header.version))
-	binary.LittleEndian.PutUint64(headerBlock[signatureSize+16:signatureSize+24], uint64(header.nextPageID))
-	binary.LittleEndian.PutUint64(headerBlock[signatureSize+24:signatureSize+32], uint64(header.nextTableID.Load()))
+	binary.LittleEndian.PutUint64(headerBlock[signatureSize+16:signatureSize+24], uint64(header.pagesCount))
+	binary.LittleEndian.PutUint64(headerBlock[signatureSize+24:signatureSize+32], uint64(header.tablesCount))
 
 	return headerBlock
 }
@@ -362,6 +358,7 @@ func (db *Database) initWAL() error {
 	}
 
 	db.syncedVersion = db.header.version
+	db.nextTableID.Store(db.header.tablesCount)
 
 	return nil
 }
@@ -392,8 +389,8 @@ func (db *Database) recoverFromWAL() error {
 
 	db.header.root = applyResult.Root
 	db.header.version = applyResult.DatabaseVersion
-	db.header.nextPageID = applyResult.TotalPages
-	db.nextTableID.Store(uint64(applyResult.LastCreatedTable + 1))
+	db.header.pagesCount = applyResult.PagesCount
+	db.header.tablesCount = applyResult.TablesCount
 
 	if err := manager.Commit(db.serializeHeader(db.header)); err != nil {
 		return fmt.Errorf("Database: failed to commit restored state: %w", err)
@@ -404,12 +401,22 @@ func (db *Database) recoverFromWAL() error {
 	}
 
 	db.syncedVersion = db.header.version
+	db.nextTableID.Store(db.header.tablesCount)
 
 	return nil
 }
 
 func (db *Database) tableManager(freePages ...pager.PageList) *TableManager {
-	return newTableManager(db.header.root, db.pager.Fork(db.header.nextPageID, freePages...))
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	state := TableManagerState{Root: db.header.root, Version: db.header.version}
+
+	return newTableManager(
+		state,
+		func() TableID { return TableID(db.nextTableID.Add(1)) },
+		db.pager.Fork(db.header.pagesCount, freePages...),
+	)
 }
 
 func (db *Database) empty() bool {

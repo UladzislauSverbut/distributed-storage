@@ -9,10 +9,9 @@ import (
 type TransactionState int32
 
 type TransactionCommit struct {
-	DatabaseVersion DatabaseVersion
-	ReadEvents      []TableEvent
-	ChangeEvents    []TableEvent
-	Response        chan<- TransactionCommitResponse
+	ReadEvents   []TableEvent
+	ChangeEvents []TableEvent
+	Response     chan<- TransactionCommitResponse
 }
 
 type TransactionCommitResponse struct {
@@ -21,9 +20,8 @@ type TransactionCommitResponse struct {
 }
 
 type Transaction struct {
-	version     DatabaseVersion
-	state       *atomic.Int32 // It's reference to TransactionState but with atomic operations support
-	nextTableID *atomic.Int64 // It's reference to TableID but with atomic operations support
+	state atomic.Int32 // It's reference to TransactionState but with atomic operations support
+
 	manager     *TableManager
 	commitQueue chan<- TransactionCommit
 	ctx         context.Context
@@ -63,9 +61,8 @@ func (tx *Transaction) Commit() (err error) {
 	responseChannel := make(chan TransactionCommitResponse, 1)
 
 	tx.commitQueue <- TransactionCommit{
-		DatabaseVersion: tx.version,
-		ChangeEvents:    tx.manager.ChangeEvents(),
-		Response:        responseChannel,
+		ChangeEvents: tx.manager.ChangeEvents(),
+		Response:     responseChannel,
 	}
 
 	select {
@@ -97,21 +94,20 @@ func (tx *Transaction) Table(tableName string) (*Table, error) {
 }
 
 func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
-	table, err := tx.manager.Table(schema.Name)
-	if err != nil {
-		return nil, fmt.Errorf("Transaction: couldn't create table %s because of error during getting table: %w", schema.Name, err)
-	}
-
-	if table != nil {
-		return nil, fmt.Errorf("Transaction: couldn't create table %s because it already exist", schema.Name)
-	}
-
-	table, err = tx.manager.CreateTable(TableID(tx.nextTableID.Add(1)), schema)
+	table, err := tx.manager.CreateTable(schema)
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because of error during creating table: %w", schema.Name, err)
 	}
 
 	return table, nil
+}
+
+func (tx *Transaction) DeleteTable(tableName string) error {
+	if err := tx.manager.DeleteTable(tableName); err != nil {
+		return fmt.Errorf("Transaction: couldn't delete table %s because of error during deleting table: %w", tableName, err)
+	}
+
+	return nil
 }
 
 func (tx *Transaction) IsActive() bool {

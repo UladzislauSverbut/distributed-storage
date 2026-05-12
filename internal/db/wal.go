@@ -25,7 +25,7 @@ type WAL struct {
 	segment         *os.File
 	segmentID       SegmentID
 	segmentSize     int
-	segmentCapacity int64
+	segmentCapacity int
 
 	directory        string
 	archiveDirectory string
@@ -166,7 +166,7 @@ func (wal *WAL) sync() error {
 		return fmt.Errorf("WAL: failed to sync WAL segment %w", err)
 	}
 
-	wal.segmentCapacity += int64(len(wal.pendingLog))
+	wal.segmentCapacity += len(wal.pendingLog)
 
 	if !wal.pendingArchive && wal.segmentFull(wal.segmentCapacity) {
 		wal.pendingArchive = true
@@ -242,7 +242,7 @@ func (wal *WAL) latestSegmentID(directory string) (SegmentID, bool, error) {
 	return segmentID, false, nil
 }
 
-func (wal *WAL) openSegment(segmentID SegmentID, directory string) (segment *os.File, capacity int64, err error) {
+func (wal *WAL) openSegment(segmentID SegmentID, directory string) (segment *os.File, capacity int, err error) {
 	defer func() {
 		if err != nil && segment != nil {
 			segment.Close()
@@ -261,7 +261,7 @@ func (wal *WAL) openSegment(segmentID SegmentID, directory string) (segment *os.
 		return
 	}
 
-	capacity = stat.Size()
+	capacity = int(stat.Size())
 
 	return
 }
@@ -299,8 +299,8 @@ func (wal *WAL) segmentName(directory string, segmentID SegmentID) string {
 	return fmt.Sprintf("%s/"+SEGMENT_NAME_FORMAT, directory, segmentID)
 }
 
-func (wal *WAL) segmentFull(capacity int64) bool {
-	return capacity >= int64(wal.segmentSize)
+func (wal *WAL) segmentFull(capacity int) bool {
+	return capacity >= wal.segmentSize
 }
 
 func (wal *WAL) scanSegment(segment *os.File) iter.Seq[TableEvent] {

@@ -22,26 +22,40 @@ var catalogSchema = TableSchema{
 }
 
 type ApplyResult struct {
-	Root             pager.PagePointer
-	DatabaseVersion  DatabaseVersion
-	LastCreatedTable TableID
+	Root            pager.PagePointer
+	DatabaseVersion DatabaseVersion
+	TablesCount     uint64
+	PagesCount      uint64
 
-	TotalPages    uint64
 	ReleasedPages pager.PageList
 	ReusablePages pager.PageList
 }
 
+type TableManagerState struct {
+	Root    pager.PagePointer
+	Version DatabaseVersion
+}
+
 type TableManager struct {
+	state   TableManagerState
+	tableID TableIDAllocator
+
 	catalog      *Table
 	loadedTables map[TableID]*Table
 
 	pager *pager.Pager
 }
 
-func newTableManager(root pager.PagePointer, pager *pager.Pager) *TableManager {
-	catalog, _ := newTable(CATALOG_TABLE_ID, root, pager, &catalogSchema)
+func newTableManager(state TableManagerState, tableID TableIDAllocator, pager *pager.Pager) *TableManager {
+	catalog, err := newTable(CATALOG_TABLE_ID, state.Root, pager, &catalogSchema)
+	if err != nil {
+		panic(fmt.Sprintf("newTableManager: couldn't initialize catalog: %v", err))
+	}
 
 	return &TableManager{
+		state:   state,
+		tableID: tableID,
+
 		catalog:      catalog,
 		loadedTables: make(map[TableID]*Table),
 
@@ -57,16 +71,18 @@ func (manager *TableManager) Table(name string) (*Table, error) {
 	}
 
 	records, err := manager.catalog.Find(manager.buildTableQueryByName(name))
-
 	if err != nil {
-		return nil, fmt.Errorf("Catalog: couldn't read table schema: %w", err)
+		return nil, fmt.Errorf("Table %s: couldn't read schema from catalog: %w", name, err)
 	}
 
 	if len(records) == 0 {
 		return nil, nil
 	}
 
-	table := manager.decodeTable(records[0])
+	table, err := manager.decodeTable(records[0])
+	if err != nil {
+		return nil, fmt.Errorf("Table %s: couldn't decode schema from catalog: %w", name, err)
+	}
 	manager.loadedTables[table.id] = table
 
 	return table, nil
@@ -79,14 +95,17 @@ func (manager *TableManager) TableByID(id TableID) (*Table, error) {
 
 	records, err := manager.catalog.Find(manager.buildTableQueryByID(id))
 	if err != nil {
-		return nil, fmt.Errorf("Catalog: couldn't read table schema: %w", err)
+		return nil, fmt.Errorf("Table ID %d: couldn't read schema from catalog: %w", id, err)
 	}
 
 	if len(records) == 0 {
 		return nil, nil
 	}
 
-	table := manager.decodeTable(records[0])
+	table, err := manager.decodeTable(records[0])
+	if err != nil {
+		return nil, fmt.Errorf("TableByID %d: couldn't decode schema from catalog: %w", id, err)
+	}
 	manager.loadedTables[id] = table
 
 	return table, nil
@@ -97,7 +116,7 @@ func (manager *TableManager) UpdateTable(table *Table) error {
 
 	oldRecord, err := manager.catalog.Update(record)
 	if err != nil {
-		return fmt.Errorf("Catalog: couldn't update 	table %s: %w", table.schema.Name, err)
+		return fmt.Errorf("UpdateTable %q: couldn't update catalog entry: %w", table.schema.Name, err)
 	}
 
 	manager.loadedTables[table.id] = table
@@ -111,24 +130,23 @@ func (manager *TableManager) UpdateTable(table *Table) error {
 	return nil
 }
 
-func (manager *TableManager) CreateTable(id TableID, schema *TableSchema) (*Table, error) {
+func (manager *TableManager) CreateTable(schema *TableSchema) (*Table, error) {
 	table, err := manager.Table(schema.Name)
 	if err != nil {
-		return nil, fmt.Errorf("Catalog: couldn't check if table %s already exists: %w", schema.Name, err)
+		return nil, fmt.Errorf("CreateTable %q: couldn't check if table already exists: %w", schema.Name, err)
 	}
-
 	if table != nil {
-		return nil, fmt.Errorf("Catalog: couldn't create table %s because it already exists", schema.Name)
+		return nil, fmt.Errorf("CreateTable %q: table already exists", schema.Name)
 	}
 
-	table, err = newTable(id, pager.NULL_PAGE, manager.pager, schema)
+	table, err = newTable(manager.tableID(), pager.NULL_PAGE, manager.pager, schema)
 	if err != nil {
-		return nil, fmt.Errorf("Catalog: couldn't create table %s: %w", schema.Name, err)
+		return nil, fmt.Errorf("CreateTable %q: couldn't initialize table: %w", schema.Name, err)
 	}
 
 	record := manager.encodeTable(table)
 	if err := manager.catalog.Insert(record); err != nil {
-		return nil, fmt.Errorf("Catalog: couldn't create table %s: %w", schema.Name, err)
+		return nil, fmt.Errorf("CreateTable %q: couldn't insert into catalog: %w", schema.Name, err)
 	}
 
 	manager.loadedTables[table.id] = table
@@ -144,14 +162,17 @@ func (manager *TableManager) CreateTable(id TableID, schema *TableSchema) (*Tabl
 func (manager *TableManager) DeleteTable(name string) error {
 	res, err := manager.catalog.Patch(manager.buildTableQueryByName(name), vals.NewObject().Set("state", vals.NewUint32(uint32(TABLE_DROPPING))))
 	if err != nil {
-		return fmt.Errorf("Catalog: couldn't delete table %s from catalog: %w", name, err)
+		return fmt.Errorf("DeleteTable %q: couldn't update catalog entry: %w", name, err)
 	}
 
 	if len(res) == 0 {
 		return nil
 	}
 
-	table := manager.decodeTable(res[0])
+	table, err := manager.decodeTable(res[0])
+	if err != nil {
+		return fmt.Errorf("DeleteTable %q: %w", name, err)
+	}
 	delete(manager.loadedTables, table.id)
 
 	table.changeEvents = append(table.changeEvents, events.NewDeleteTable(uint64(table.id)))
@@ -180,13 +201,13 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (res A
 		if err != nil {
 			manager.pager.Restore(snapshot)
 			manager.catalog, _ = newTable(CATALOG_TABLE_ID, root, manager.pager, &catalogSchema) // In case of error we restore previous catalog state
-			manager.loadedTables = make(map[TableID]*Table)                                      //In case of error we discard all cached tables
+			manager.loadedTables = make(map[TableID]*Table)
 		}
 
 		res.Root = root
 		res.ReleasedPages = manager.pager.ReleasedPages()
 		res.ReusablePages = manager.pager.ReusablePages()
-		res.TotalPages = manager.pager.TotalPages()
+		res.PagesCount = manager.pager.PagesCount()
 	}()
 
 	for _, changeEvent := range changeEvents {
@@ -198,7 +219,7 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (res A
 			if err = manager.applyCreateTableEvent(event); err != nil {
 				return
 			}
-			res.LastCreatedTable = TableID(event.TableID)
+			res.TablesCount = event.TableID + 1
 
 		case *events.DeleteTable:
 			if err = manager.applyDeleteTableEvent(event); err != nil {
@@ -226,7 +247,7 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (res A
 			// These events are not related to table schema or entries, so we can ignore them during replay
 
 		default:
-			err = fmt.Errorf("Catalog: couldn't apply unknown event %s", event.Name())
+			err = fmt.Errorf("ApplyChangeEvents: unknown event %q", event.Name())
 			return
 		}
 
@@ -241,20 +262,22 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (res A
 
 func (manager *TableManager) Commit(headerData []byte) error {
 	if err := manager.pager.UpdatePage(HEADER_PAGE, headerData); err != nil {
-		return fmt.Errorf("TableManager: failed to update header page: %w", err)
+		return fmt.Errorf("Commit: couldn't update header page: %w", err)
 	}
 	if err := manager.pager.SaveChanges(); err != nil {
-		return fmt.Errorf("TableManager: failed to save changes: %w", err)
+		return fmt.Errorf("Commit: couldn't save changes: %w", err)
 	}
 
 	return nil
 }
 
 func (manager *TableManager) saveChanges() error {
-	// We only need to update tables that were changed
 	for _, table := range manager.loadedTables {
+		if len(table.ChangeEvents()) == 0 {
+			continue // table was only read, no changes to persist
+		}
 		if err := manager.UpdateTable(table); err != nil {
-			return fmt.Errorf("Catalog: couldn't write table %s: %w", table.schema.Name, err)
+			return fmt.Errorf("saveChanges: %w", err)
 		}
 	}
 
@@ -267,9 +290,24 @@ func (manager *TableManager) applyCreateTableEvent(event *events.CreateTable) er
 		return fmt.Errorf("CreateTable Apply: couldn't parse schema: %w", err)
 	}
 
-	if _, err := manager.CreateTable(TableID(event.TableID), schema); err != nil {
-		return fmt.Errorf("CreateTable Apply: %w", err)
+	existing, err := manager.TableByID(TableID(event.TableID))
+	if err != nil {
+		return fmt.Errorf("CreateTable Apply: couldn't check if table %q already exists: %w", schema.Name, err)
 	}
+	if existing != nil {
+		return fmt.Errorf("CreateTable Apply: table %q already exists", schema.Name)
+	}
+
+	table, err := newTable(TableID(event.TableID), pager.NULL_PAGE, manager.pager, schema)
+	if err != nil {
+		return fmt.Errorf("CreateTable Apply: couldn't create table %q: %w", schema.Name, err)
+	}
+
+	if err := manager.catalog.Insert(manager.encodeTable(table)); err != nil {
+		return fmt.Errorf("CreateTable Apply: couldn't insert table %q into catalog: %w", schema.Name, err)
+	}
+
+	manager.loadedTables[table.id] = table
 
 	return nil
 }
@@ -277,10 +315,10 @@ func (manager *TableManager) applyCreateTableEvent(event *events.CreateTable) er
 func (manager *TableManager) applyDeleteTableEvent(event *events.DeleteTable) error {
 	table, err := manager.TableByID(TableID(event.TableID))
 	if err != nil {
-		return fmt.Errorf("DeleteTable Apply: %w", err)
+		return err
 	}
 	if table == nil {
-		return fmt.Errorf("DeleteTable Apply: table with ID %d not found", event.TableID)
+		return nil
 	}
 
 	if err := manager.DeleteTable(table.schema.Name); err != nil {
@@ -293,10 +331,7 @@ func (manager *TableManager) applyDeleteTableEvent(event *events.DeleteTable) er
 func (manager *TableManager) applyDeleteEntryEvent(event *events.DeleteEntry) error {
 	table, err := manager.TableByID(TableID(event.TableID))
 	if err != nil {
-		return fmt.Errorf("DeleteEntry Apply: %w", err)
-	}
-	if table == nil {
-		return fmt.Errorf("DeleteEntry Apply: table with ID %d not found", event.TableID)
+		return err
 	}
 
 	response, err := table.kv.Delete(&kv.DeleteRequest{Key: event.Key})
@@ -313,7 +348,7 @@ func (manager *TableManager) applyDeleteEntryEvent(event *events.DeleteEntry) er
 func (manager *TableManager) applyUpdateEntryEvent(event *events.UpdateEntry) error {
 	table, err := manager.TableByID(TableID(event.TableID))
 	if err != nil {
-		return fmt.Errorf("UpdateEntry Apply: %w", err)
+		return err
 	}
 	if table == nil {
 		return fmt.Errorf("UpdateEntry Apply: table with ID %d not found", event.TableID)
@@ -333,7 +368,7 @@ func (manager *TableManager) applyUpdateEntryEvent(event *events.UpdateEntry) er
 func (manager *TableManager) applyInsertEntryEvent(event *events.InsertEntry) error {
 	table, err := manager.TableByID(TableID(event.TableID))
 	if err != nil {
-		return fmt.Errorf("InsertEntry Apply: %w", err)
+		return err
 	}
 	if table == nil {
 		return fmt.Errorf("InsertEntry Apply: table with ID %d not found", event.TableID)
@@ -358,19 +393,24 @@ func (manager *TableManager) buildTableQueryByID(id TableID) *vals.Object {
 	return vals.NewObject().Set("id", vals.NewUint64(uint64(id)))
 }
 
-func (manager *TableManager) decodeTable(record *vals.Object) *Table {
+func (manager *TableManager) decodeTable(record *vals.Object) (*Table, error) {
 	id := TableID(record.GetUint64("id"))
 	state := TableState(record.GetUint32("state"))
 	definition := record.GetString("definition")
 	root := record.GetUint64("root")
 
 	schema := &TableSchema{}
-	json.Unmarshal([]byte(definition), schema)
+	if err := json.Unmarshal([]byte(definition), schema); err != nil {
+		return nil, fmt.Errorf("decodeTable: couldn't parse schema for table ID %d: %w", id, err)
+	}
 
-	table, _ := newTable(id, root, manager.pager, schema)
+	table, err := newTable(id, root, manager.pager, schema)
+	if err != nil {
+		return nil, fmt.Errorf("decodeTable: couldn't initialize table ID %d: %w", id, err)
+	}
 	table.state = state
 
-	return table
+	return table, nil
 }
 
 func (manager *TableManager) encodeTable(table *Table) *vals.Object {
