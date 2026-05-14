@@ -7,6 +7,7 @@ type ValueType = uint8
 type Value interface {
 	Type() ValueType
 	Empty() bool
+	Equal(Value) bool
 	Serialize() []byte
 	Parse([]byte) int
 }

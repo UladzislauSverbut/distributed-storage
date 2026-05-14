@@ -10,6 +10,14 @@ func (value *Int64Value) Value() int64    { return value.num }
 func (value *Int64Value) Type() ValueType { return TYPE_INT64 }
 func (value *Int64Value) Empty() bool     { return false }
 
+func (value *Int64Value) Equal(other Value) bool {
+	if other.Type() != TYPE_INT64 {
+		return false
+	}
+
+	return value.num == other.(*Int64Value).num
+}
+
 func (value *Int64Value) Serialize() []byte {
 	serializedInt := make([]byte, 8)
 	binary.LittleEndian.PutUint64(serializedInt, uint64(value.num)+(1<<63)) // reverse order of bits to make negative numbers smaller than positive ones

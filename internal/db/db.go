@@ -173,8 +173,8 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	latestUnreachableVersion := db.latestUnreachableVersion()
 	manager := db.tableManager(db.collectReleasedPages(latestUnreachableVersion))
 
-	abortedTransactions := make([]TransactionCommit, 0)
-	approvedTransactions := make([]TransactionCommit, 0)
+	var abortedTransactions []TransactionCommit
+	var approvedTransactions []TransactionCommit
 
 	var (
 		applyResult ApplyResult

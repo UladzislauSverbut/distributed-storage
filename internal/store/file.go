@@ -37,12 +37,11 @@ func NewFileStorage(filePath string, initialSize int) (*FileStorage, error) {
 	}
 
 	fileSize := int(fileStat.Size())
-	virtualMemory := [][]byte{}
 	storage := &FileStorage{
 		file:   file,
 		size:   fileSize,
 		offset: 0,
-		memory: virtualMemory,
+		memory: [][]byte{},
 	}
 
 	if storage.size > 0 {

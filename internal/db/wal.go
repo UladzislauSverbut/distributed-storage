@@ -105,11 +105,11 @@ func (wal *WAL) eventsSince(version DatabaseVersion) ([]TableEvent, error) {
 	segment := wal.segment
 	segmentID := wal.segmentID
 
-	changes := [][]TableEvent{}
+	var changes [][]TableEvent
 	changesFound := false
 
 	for {
-		segmentChanges := []TableEvent{}
+		var segmentChanges []TableEvent
 
 		for event := range wal.scanSegment(segment) {
 			segmentChanges = append(segmentChanges, event)

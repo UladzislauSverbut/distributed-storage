@@ -10,6 +10,14 @@ func (value *Int32Value) Value() int32    { return value.num }
 func (value *Int32Value) Type() ValueType { return TYPE_INT32 }
 func (value *Int32Value) Empty() bool     { return false }
 
+func (value *Int32Value) Equal(other Value) bool {
+	if other.Type() != TYPE_INT32 {
+		return false
+	}
+
+	return value.num == other.(*Int32Value).num
+}
+
 func (value *Int32Value) Serialize() []byte {
 	serializedInt := make([]byte, 4)
 	binary.LittleEndian.PutUint32(serializedInt, uint32(value.num)+(1<<31)) // reverse order of bits to make negative numbers smaller than positive ones

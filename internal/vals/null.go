@@ -15,6 +15,10 @@ func (value *NullValue) Parse(payload []byte) int {
 	return 0
 }
 
+func (value *NullValue) Equal(other Value) bool {
+	return other.Type() == TYPE_NULL
+}
+
 func NewNull() *NullValue {
 	return &NullValue{}
 }

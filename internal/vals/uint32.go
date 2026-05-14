@@ -10,6 +10,14 @@ func (value *Uint32Value) Value() uint32   { return value.num }
 func (value *Uint32Value) Type() ValueType { return TYPE_UINT32 }
 func (value *Uint32Value) Empty() bool     { return false }
 
+func (value *Uint32Value) Equal(other Value) bool {
+	if other.Type() != TYPE_UINT32 {
+		return false
+	}
+
+	return value.num == other.(*Uint32Value).num
+}
+
 func (value *Uint32Value) Serialize() []byte {
 	serializedInt := make([]byte, 4)
 	binary.LittleEndian.PutUint32(serializedInt, value.num)

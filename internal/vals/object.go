@@ -43,10 +43,28 @@ func (object *Object) Merge(other *Object) *Object {
 		mergedObject.Set(field, value)
 	}
 
+	if other == nil {
+		return mergedObject
+	}
+
 	for field, value := range other.Values() {
 		mergedObject.Set(field, value)
 	}
 	return mergedObject
+}
+
+func (object *Object) Matches(other *Object) bool {
+	if other == nil {
+		return false
+	}
+
+	for name, value := range object.fields {
+		if !other.Get(name).Equal(value) {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (object *Object) GetString(field string) string {

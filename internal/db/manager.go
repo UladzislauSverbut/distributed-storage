@@ -160,19 +160,20 @@ func (manager *TableManager) CreateTable(schema *TableSchema) (*Table, error) {
 }
 
 func (manager *TableManager) DeleteTable(name string) error {
-	res, err := manager.catalog.Patch(manager.buildTableQueryByName(name), vals.NewObject().Set("state", vals.NewUint32(uint32(TABLE_DROPPING))))
+	table, err := manager.Table(name)
 	if err != nil {
-		return fmt.Errorf("DeleteTable %q: couldn't update catalog entry: %w", name, err)
+		return fmt.Errorf("DeleteTable %q: couldn't check if table exists: %w", name, err)
 	}
-
-	if len(res) == 0 {
+	if table == nil {
 		return nil
 	}
 
-	table, err := manager.decodeTable(res[0])
-	if err != nil {
-		return fmt.Errorf("DeleteTable %q: %w", name, err)
+	table.state = TABLE_DROPPING
+
+	if _, err := manager.catalog.Update(manager.encodeTable(table)); err != nil {
+		return fmt.Errorf("DeleteTable %q: couldn't update catalog entry: %w", name, err)
 	}
+
 	delete(manager.loadedTables, table.id)
 
 	table.changeEvents = append(table.changeEvents, events.NewDeleteTable(uint64(table.id)))
@@ -181,7 +182,7 @@ func (manager *TableManager) DeleteTable(name string) error {
 }
 
 func (manager *TableManager) ChangeEvents() []TableEvent {
-	events := make([]TableEvent, 0)
+	var events []TableEvent
 
 	for _, table := range manager.loadedTables {
 		tableEvents := table.ChangeEvents()
@@ -204,7 +205,7 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (res A
 			manager.loadedTables = make(map[TableID]*Table)
 		}
 
-		res.Root = root
+		res.Root = manager.catalog.Root()
 		res.ReleasedPages = manager.pager.ReleasedPages()
 		res.ReusablePages = manager.pager.ReusablePages()
 		res.PagesCount = manager.pager.PagesCount()
@@ -250,9 +251,6 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (res A
 			err = fmt.Errorf("ApplyChangeEvents: unknown event %q", event.Name())
 			return
 		}
-
-		root = manager.catalog.Root()       // We update root after each event because some events can change catalog root and we need to keep track of it to be able to restore state in case of error
-		snapshot = manager.pager.Snapshot() // We update snapshot after each event because some events can change pager state and we need to keep track of it to be able to restore state in case of error
 	}
 
 	err = manager.saveChanges()
@@ -273,9 +271,6 @@ func (manager *TableManager) Commit(headerData []byte) error {
 
 func (manager *TableManager) saveChanges() error {
 	for _, table := range manager.loadedTables {
-		if len(table.ChangeEvents()) == 0 {
-			continue // table was only read, no changes to persist
-		}
 		if err := manager.UpdateTable(table); err != nil {
 			return fmt.Errorf("saveChanges: %w", err)
 		}

@@ -45,9 +45,8 @@ func newTable(id TableID, root pager.PagePointer, pager *pager.Pager, schema *Ta
 		id:    id,
 		state: TABLE_ACTIVE,
 
-		kv:           kv,
-		schema:       schema,
-		changeEvents: []TableEvent{},
+		kv:     kv,
+		schema: schema,
 	}
 
 	if err := table.validateTableSchema(); err != nil {
@@ -64,36 +63,41 @@ func (table *Table) Get(query *vals.Object) (*vals.Object, error) {
 		return nil, fmt.Errorf("Table: can't find record because one of primary index columns is missing in query %s", query)
 	}
 
-	if response, err := table.kv.Get(&kv.GetRequest{Key: index}); err != nil {
+	response, err := table.kv.Get(&kv.GetRequest{Key: index})
+	if err != nil {
 		return nil, err
-	} else {
-		return table.decodePayload(response.Value), err
 	}
+
+	record := table.decodePayload(response.Value)
+	if query.Matches(record) {
+		return record, nil
+	}
+
+	return nil, nil
 }
 
 func (table *Table) Find(query *vals.Object) ([]*vals.Object, error) {
-	records := make([]*vals.Object, 0)
-
 	partialIndex, isPrimary := table.getPartialIndex(query)
 	cursor := table.kv.Scan(&kv.ScanRequest{Key: partialIndex})
 
-	if cursor.Empty() {
-		return records, nil
-	}
+	var records []*vals.Object
 
-	if isPrimary {
-		for index, value := cursor.Current(); table.matchIndexes(index, partialIndex); index, value = cursor.Next() {
-			records = append(records, table.decodePayload(value))
-		}
-	} else {
-		for index, _ := cursor.Current(); table.matchIndexes(index, partialIndex); index, _ = cursor.Next() {
+	for index, value := cursor.Current(); table.matchIndexes(index, partialIndex); index, value = cursor.Next() {
+		var record *vals.Object
+
+		if isPrimary {
+			record = table.decodePayload(value)
+		} else {
 			primaryIndexValues, _, _ := table.decodeSecondaryIndex(index)
-
-			if response, err := table.kv.Get(&kv.GetRequest{Key: table.encodePrimaryIndex(primaryIndexValues)}); err != nil {
+			response, err := table.kv.Get(&kv.GetRequest{Key: table.encodePrimaryIndex(primaryIndexValues)})
+			if err != nil {
 				return nil, err
-			} else {
-				records = append(records, table.decodePayload(response.Value))
 			}
+			record = table.decodePayload(response.Value)
+		}
+
+		if query.Matches(record) {
+			records = append(records, record)
 		}
 	}
 
@@ -101,15 +105,11 @@ func (table *Table) Find(query *vals.Object) ([]*vals.Object, error) {
 }
 
 func (table *Table) GetAll() []*vals.Object {
-	records := make([]*vals.Object, 0)
 	cursor := table.kv.Scan(&kv.ScanRequest{})
 
-	if cursor.Empty() {
-		return records
-	}
+	var records []*vals.Object
 
 	for index, value := cursor.Current(); value != nil; index, value = cursor.Next() {
-
 		if table.matchPrimaryIndex(index) {
 			records = append(records, table.decodePayload(value))
 		}
@@ -118,20 +118,36 @@ func (table *Table) GetAll() []*vals.Object {
 	return records
 }
 
-func (table *Table) Delete(query *vals.Object) (*vals.Object, error) {
-	index := table.getPrimaryIndex(query)
+func (table *Table) Delete(record *vals.Object) (*vals.Object, error) {
+	index := table.getPrimaryIndex(record)
 
 	if index == nil {
-		return nil, fmt.Errorf("Table: can't delete record because one of primary index columns is missing: %s", query)
+		return nil, fmt.Errorf("Table: can't delete record because one of primary index columns is missing: %q", record)
 	}
 
-	if response, err := table.kv.Delete(&kv.DeleteRequest{Key: index}); err != nil {
+	response, err := table.kv.Delete(&kv.DeleteRequest{Key: index})
+	if err != nil {
 		return nil, err
-	} else {
-		table.changeEvents = append(table.changeEvents, events.NewDeleteEntry(uint64(table.id), index, response.OldValue))
-
-		return table.decodePayload(response.OldValue), nil
 	}
+
+	table.changeEvents = append(table.changeEvents, events.NewDeleteEntry(uint64(table.id), index, response.OldValue))
+
+	return table.decodePayload(response.OldValue), nil
+}
+
+func (table *Table) DeleteMany(query *vals.Object) ([]*vals.Object, error) {
+	records, err := table.Find(query)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, record := range records {
+		if _, err := table.Delete(record); err != nil {
+			return nil, err
+		}
+	}
+
+	return records, nil
 }
 
 func (table *Table) Insert(record *vals.Object) error {
@@ -141,9 +157,12 @@ func (table *Table) Insert(record *vals.Object) error {
 		return fmt.Errorf("Table: can't insert record because one of primary index columns is missing in record %s", record)
 	}
 
-	if response, err := table.kv.Get(&kv.GetRequest{Key: index}); err != nil {
+	response, err := table.kv.Get(&kv.GetRequest{Key: index})
+	if err != nil {
 		return err
-	} else if response.Value != nil {
+	}
+
+	if response.Value != nil {
 		return fmt.Errorf("Table: can't insert record because it already exists: %v", record)
 	}
 
@@ -179,26 +198,28 @@ func (table *Table) Update(record *vals.Object) (*vals.Object, error) {
 		return nil, fmt.Errorf("Table: can't update record because it doesn't exist: %v", record)
 	}
 
-	newValue := table.encodePayload(record)
+	oldRecord := table.decodePayload(response.Value)
+	newRecord := oldRecord.Merge(record)
+	newValue := table.encodePayload(newRecord)
 
 	if _, err := table.kv.Set(&kv.SetRequest{Key: index, Value: newValue}); err != nil {
 		return nil, err
 	}
 
-	if err := table.updateSecondaryIndexes(record, table.decodePayload(response.Value)); err != nil {
+	if err := table.updateSecondaryIndexes(newRecord, oldRecord); err != nil {
 		return nil, err
 	}
 
 	table.changeEvents = append(table.changeEvents, events.NewUpdateEntry(uint64(table.id), index, response.Value, newValue))
 
-	return table.decodePayload(response.Value), nil
+	return oldRecord, nil
 }
 
 func (table *Table) Upsert(record *vals.Object) (*vals.Object, error) {
 	index := table.getPrimaryIndex(record)
 
 	if index == nil {
-		return nil, fmt.Errorf("Table: can't update record because one of primary index columns is missing in record %s", record)
+		return nil, fmt.Errorf("Table: can't upsert record because one of primary index columns is missing in record %s", record)
 	}
 
 	response, err := table.kv.Get(&kv.GetRequest{Key: index})
@@ -230,10 +251,8 @@ func (table *Table) Upsert(record *vals.Object) (*vals.Object, error) {
 	return table.decodePayload(response.Value), nil
 }
 
-func (table *Table) Patch(query *vals.Object, patch *vals.Object) ([]*vals.Object, error) {
-	if len(patch.GetMany(table.schema.PrimaryIndex)) > 0 {
-		return nil, fmt.Errorf("Table: can't patch record because patch contains primary index columns: %s", patch)
-	}
+func (table *Table) UpdateMany(query *vals.Object, update *vals.Object) ([]*vals.Object, error) {
+	primaryIndexChange := len(update.GetMany(table.schema.PrimaryIndex)) > 0
 
 	records, err := table.Find(query)
 	if err != nil {
@@ -241,8 +260,20 @@ func (table *Table) Patch(query *vals.Object, patch *vals.Object) ([]*vals.Objec
 	}
 
 	for _, record := range records {
-		if _, err := table.Update(record.Merge(patch)); err != nil {
-			return nil, err
+		newRecord := record.Merge(update)
+
+		if primaryIndexChange {
+			if _, err := table.Delete(record); err != nil {
+				return nil, err
+			}
+
+			if err := table.Insert(newRecord); err != nil {
+				return nil, err
+			}
+		} else {
+			if _, err := table.Update(newRecord); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -271,7 +302,6 @@ func (table *Table) ChangeEvents() []TableEvent {
 
 func (table *Table) createSecondaryIndexes(record *vals.Object) error {
 	for indexNumber := range table.schema.SecondaryIndexes {
-
 		if secondaryIndex := table.getSecondaryIndex(record, indexNumber); secondaryIndex != nil {
 			if _, err := table.kv.Set(&kv.SetRequest{Key: secondaryIndex}); err != nil {
 				return err
@@ -362,7 +392,7 @@ func (table *Table) encodePayload(record *vals.Object) []byte {
 		return nil
 	}
 
-	encodedPayload := make([]byte, 0)
+	var encodedPayload []byte
 
 	for fieldName, fieldValue := range record.Values() {
 		encodedPayload = append(encodedPayload, vals.NewString(fieldName).Serialize()...)
@@ -486,7 +516,7 @@ func (table *Table) containsEmptyValues(values []vals.Value) bool {
 }
 
 func (table *Table) removeEmptyValues(values []vals.Value) []vals.Value {
-	nonEmptyValues := make([]vals.Value, 0)
+	var nonEmptyValues []vals.Value
 
 	for _, value := range values {
 		if value.Empty() {

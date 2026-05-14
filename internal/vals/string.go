@@ -10,6 +10,14 @@ func (value *StringValue) Value() string   { return string(value.str) }
 func (value *StringValue) Type() ValueType { return TYPE_STRING }
 func (value *StringValue) Empty() bool     { return false }
 
+func (value *StringValue) Equal(other Value) bool {
+	if other.Type() != TYPE_STRING {
+		return false
+	}
+
+	return bytes.Equal(value.str, other.(*StringValue).str)
+}
+
 func (value *StringValue) Serialize() []byte {
 	escapeSymbolsCount := bytes.Count(value.str, []byte{0}) + bytes.Count(value.str, []byte{1})
 	serializedString := make([]byte, len(value.str)+escapeSymbolsCount+1)
