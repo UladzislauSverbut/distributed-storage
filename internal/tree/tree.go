@@ -111,6 +111,10 @@ func (tree *Tree) Root() pager.PagePointer {
 }
 
 func (tree *Tree) getKeyValue(node *Node, key []byte) []byte {
+	if node.getStoredKeysNumber() == 0 {
+		return nil
+	}
+
 	keyPosition := tree.getLessOrEqualKeyPosition(node, key)
 	switch node.getType() {
 	case NODE_LEAF:

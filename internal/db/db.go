@@ -414,7 +414,7 @@ func (db *Database) tableManager(freePages ...pager.PageList) *TableManager {
 
 	return newTableManager(
 		state,
-		func() TableID { return TableID(db.nextTableID.Add(1)) },
+		func() TableID { return TableID(db.nextTableID.Add(1) - 1) },
 		db.pager.Fork(db.header.pagesCount, freePages...),
 	)
 }
