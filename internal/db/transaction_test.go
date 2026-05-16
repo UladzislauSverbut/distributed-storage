@@ -144,7 +144,7 @@ func TestTransaction_CreateTable_ThenTable_FindsIt(t *testing.T) {
 	}
 }
 
-func TestTransaction_DeleteTable(t *testing.T) {
+func TestTransaction_DropTable(t *testing.T) {
 	tx := newTestTransaction(t)
 	schema := &TableSchema{
 		Name:         "temp",
@@ -156,8 +156,8 @@ func TestTransaction_DeleteTable(t *testing.T) {
 	if _, err := tx.CreateTable(schema); err != nil {
 		t.Fatalf("CreateTable failed: %v", err)
 	}
-	if err := tx.DeleteTable("temp"); err != nil {
-		t.Fatalf("DeleteTable failed: %v", err)
+	if err := tx.DropTable("temp"); err != nil {
+		t.Fatalf("DropTable failed: %v", err)
 	}
 }
 

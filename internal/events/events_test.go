@@ -118,17 +118,17 @@ func TestCreateTable_Parse_ErrorOnWrongPrefix(t *testing.T) {
 	}
 }
 
-// ── DeleteTable ────────────────────────────────────────────────────────────
+// ── DropTable ────────────────────────────────────────────────────────────
 
-func TestDeleteTable_Name(t *testing.T) {
-	if NewDeleteTable(1).Name() != DELETE_TABLE_EVENT {
-		t.Errorf("expected %q", DELETE_TABLE_EVENT)
+func TestDropTable_Name(t *testing.T) {
+	if NewDropTable(1).Name() != DROP_TABLE_EVENT {
+		t.Errorf("expected %q", DROP_TABLE_EVENT)
 	}
 }
 
-func TestDeleteTable_SerializeParse_PreservesTableID(t *testing.T) {
-	original := NewDeleteTable(99)
-	parsed, err := ParseDeleteTable(original.Serialize())
+func TestDropTable_SerializeParse_PreservesTableID(t *testing.T) {
+	original := NewDropTable(99)
+	parsed, err := ParseDropTable(original.Serialize())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -137,8 +137,8 @@ func TestDeleteTable_SerializeParse_PreservesTableID(t *testing.T) {
 	}
 }
 
-func TestDeleteTable_Parse_ErrorOnWrongPrefix(t *testing.T) {
-	if _, err := ParseDeleteTable([]byte(wrongPrefix)); err == nil {
+func TestDropTable_Parse_ErrorOnWrongPrefix(t *testing.T) {
+	if _, err := ParseDropTable([]byte(wrongPrefix)); err == nil {
 		t.Error("expected error on wrong prefix")
 	}
 }
@@ -462,13 +462,13 @@ func TestParse_CreateTable(t *testing.T) {
 	}
 }
 
-func TestParse_DeleteTable(t *testing.T) {
-	ev, err := Parse(NewDeleteTable(1).Serialize())
+func TestParse_DropTable(t *testing.T) {
+	ev, err := Parse(NewDropTable(1).Serialize())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if ev.Name() != DELETE_TABLE_EVENT {
-		t.Errorf("expected %q, got %q", DELETE_TABLE_EVENT, ev.Name())
+	if ev.Name() != DROP_TABLE_EVENT {
+		t.Errorf("expected %q, got %q", DROP_TABLE_EVENT, ev.Name())
 	}
 }
 

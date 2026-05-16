@@ -100,7 +100,7 @@ func TestTableManager_Table_FindByName_AfterCacheClear(t *testing.T) {
 	}
 }
 
-func TestTableManager_DeleteTable_Existing(t *testing.T) {
+func TestTableManager_DropTable_Existing(t *testing.T) {
 	m := newTestManager(t)
 	schema := &TableSchema{
 		Name:         "temp",
@@ -112,18 +112,18 @@ func TestTableManager_DeleteTable_Existing(t *testing.T) {
 	if _, err := m.CreateTable(schema); err != nil {
 		t.Fatalf("CreateTable failed: %v", err)
 	}
-	if err := m.DeleteTable("temp"); err != nil {
-		t.Fatalf("DeleteTable failed: %v", err)
+	if err := m.DropTable("temp"); err != nil {
+		t.Fatalf("DropTable failed: %v", err)
 	}
 	if len(m.loadedTables) != 0 {
-		t.Errorf("expected 0 loaded tables after delete, got %d", len(m.loadedTables))
+		t.Errorf("expected 0 loaded tables after drop, got %d", len(m.loadedTables))
 	}
 }
 
-func TestTableManager_DeleteTable_Nonexistent_NoError(t *testing.T) {
+func TestTableManager_DropTable_Nonexistent_NoError(t *testing.T) {
 	m := newTestManager(t)
-	if err := m.DeleteTable("ghost"); err != nil {
-		t.Errorf("unexpected error deleting nonexistent table: %v", err)
+	if err := m.DropTable("ghost"); err != nil {
+		t.Errorf("unexpected error dropping nonexistent table: %v", err)
 	}
 }
 

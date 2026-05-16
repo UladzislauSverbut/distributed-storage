@@ -159,10 +159,10 @@ func (manager *TableManager) CreateTable(schema *TableSchema) (*Table, error) {
 	return table, nil
 }
 
-func (manager *TableManager) DeleteTable(name string) error {
+func (manager *TableManager) DropTable(name string) error {
 	table, err := manager.Table(name)
 	if err != nil {
-		return fmt.Errorf("DeleteTable %q: couldn't check if table exists: %w", name, err)
+		return fmt.Errorf("DropTable %q: couldn't check if table exists: %w", name, err)
 	}
 	if table == nil {
 		return nil
@@ -171,12 +171,12 @@ func (manager *TableManager) DeleteTable(name string) error {
 	table.state = TABLE_DROPPING
 
 	if _, err := manager.catalog.Update(manager.encodeTable(table)); err != nil {
-		return fmt.Errorf("DeleteTable %q: couldn't update catalog entry: %w", name, err)
+		return fmt.Errorf("DropTable %q: couldn't update catalog entry: %w", name, err)
 	}
 
 	delete(manager.loadedTables, table.id)
 
-	table.changeEvents = append(table.changeEvents, events.NewDeleteTable(uint64(table.id)))
+	table.changeEvents = append(table.changeEvents, events.NewDropTable(uint64(table.id)))
 
 	return nil
 }
@@ -222,8 +222,8 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (res A
 			}
 			res.TablesCount = event.TableID + 1
 
-		case *events.DeleteTable:
-			if err = manager.applyDeleteTableEvent(event); err != nil {
+		case *events.DropTable:
+			if err = manager.applyDropTableEvent(event); err != nil {
 				return
 			}
 
@@ -307,7 +307,7 @@ func (manager *TableManager) applyCreateTableEvent(event *events.CreateTable) er
 	return nil
 }
 
-func (manager *TableManager) applyDeleteTableEvent(event *events.DeleteTable) error {
+func (manager *TableManager) applyDropTableEvent(event *events.DropTable) error {
 	table, err := manager.TableByID(TableID(event.TableID))
 	if err != nil {
 		return err
@@ -316,8 +316,8 @@ func (manager *TableManager) applyDeleteTableEvent(event *events.DeleteTable) er
 		return nil
 	}
 
-	if err := manager.DeleteTable(table.schema.Name); err != nil {
-		return fmt.Errorf("DeleteTable Apply: %w", err)
+	if err := manager.DropTable(table.schema.Name); err != nil {
+		return fmt.Errorf("DropTable Apply: %w", err)
 	}
 
 	return nil

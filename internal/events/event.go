@@ -27,8 +27,8 @@ func Parse(data []byte) (Event, error) {
 		return ParseUpdateEntry(data)
 	case bytes.HasPrefix(data, []byte(CREATE_TABLE_EVENT)):
 		return ParseCreateTable(data)
-	case bytes.HasPrefix(data, []byte(DELETE_TABLE_EVENT)):
-		return ParseDeleteTable(data)
+	case bytes.HasPrefix(data, []byte(DROP_TABLE_EVENT)):
+		return ParseDropTable(data)
 	case bytes.HasPrefix(data, []byte(UPDATE_TABLE_EVENT)):
 		return ParseUpdateTable(data)
 	case bytes.HasPrefix(data, []byte(UPDATE_DB_VERSION)):
