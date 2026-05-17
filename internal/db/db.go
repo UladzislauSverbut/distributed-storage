@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -189,13 +190,14 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	}
 
 	retiredPages := applyResult.PageChanges.RetiredPages
-	freePages := applyResult.PageChanges.FreePages
+	reusablePages := applyResult.PageChanges.ReusablePages
+	pagesCount := applyResult.PageChanges.PagesCount
 
 	newHeader := &DatabaseHeader{
 		root:        applyResult.Root,
 		version:     db.header.version + 1,
-		pagesCount:  applyResult.Stats.PagesCount,
-		tablesCount: applyResult.Stats.TablesCount,
+		tablesCount: db.nextTableID.Load(),
+		pagesCount:  pagesCount,
 	}
 
 	if err := manager.Commit(db.serializeHeader(newHeader)); err != nil {
@@ -206,8 +208,8 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	db.wal.appendTransactions(approvedTransactions)
 	db.wal.appendVersionUpdate(db.header.version + 1)
 
-	db.wal.appendFreePages(latestUnreachableVersion, freePages) // These pages can be reused because they are not used by any active transaction (e.g. they were allocated and released in the same version)
-	db.wal.appendFreePages(db.header.version, retiredPages)     // These pages will be ready to safely reused only since next db version because they can be still used by active transactions in the current version
+	db.wal.appendFreePages(latestUnreachableVersion, reusablePages) // These pages can be reused because they are not used by any active transaction (e.g. they were allocated and released in the same version)
+	db.wal.appendFreePages(db.header.version, retiredPages)         // These pages will be ready to safely reused only since next db version because they can be still used by active transactions in the current version
 
 	if err := db.wal.sync(); err != nil {
 		db.rejectTransactions(transactions, fmt.Errorf("Database: WAL flush failed: %w", err))
@@ -217,7 +219,7 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	db.approveTransactions(approvedTransactions)
 	db.rejectTransactions(abortedTransactions, errors.New("Database: transaction aborted due to conflicts with other transactions"))
 
-	db.releasePages(latestUnreachableVersion, freePages)
+	db.releasePages(latestUnreachableVersion, reusablePages)
 	db.releasePages(db.header.version, retiredPages)
 
 	db.mu.Lock()
@@ -375,7 +377,6 @@ func (db *Database) recoverFromWAL() error {
 	for _, event := range restoredEvents {
 		if event, ok := event.(*events.FreePages); ok {
 			freePages.AddMany(event.List.Pages())
-		} else {
 			break
 		}
 	}
@@ -389,8 +390,11 @@ func (db *Database) recoverFromWAL() error {
 
 	db.header.root = applyResult.Root
 	db.header.version = applyResult.DatabaseVersion
-	db.header.pagesCount = applyResult.Stats.PagesCount
-	db.header.tablesCount = applyResult.Stats.TablesCount
+	db.header.pagesCount = applyResult.PageChanges.PagesCount
+
+	if len(applyResult.SchemaChanges.CreatedTables) > 0 {
+		db.header.tablesCount = uint64(slices.Max(applyResult.SchemaChanges.CreatedTables)) + 1
+	}
 
 	if err := manager.Commit(db.serializeHeader(db.header)); err != nil {
 		return fmt.Errorf("Database: failed to commit restored state: %w", err)

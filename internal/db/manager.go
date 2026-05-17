@@ -16,23 +16,19 @@ const CATALOG_TABLE_ID = TableID(0)
 
 type SchemaChanges struct {
 	DeletedTables []TableID
-}
-
-type TotalStats struct {
-	TablesCount uint64
-	PagesCount  uint64
+	CreatedTables []TableID
 }
 
 type PageChanges struct {
-	FreePages    pager.PageList
-	RetiredPages pager.PageList
+	PagesCount    pager.PagesCount
+	ReusablePages pager.PageList
+	RetiredPages  pager.PageList
 }
 
 type ApplyResult struct {
 	Root            pager.PagePointer
 	DatabaseVersion DatabaseVersion
 
-	Stats         TotalStats
 	PageChanges   PageChanges
 	SchemaChanges SchemaChanges
 }
@@ -219,8 +215,8 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (res A
 		}
 
 		res.Root = manager.catalog.Root()
-		res.Stats.PagesCount = manager.pager.PagesCount()
-		res.PageChanges.FreePages = manager.pager.FreePages()
+		res.PageChanges.PagesCount = manager.pager.PagesCount()
+		res.PageChanges.ReusablePages = manager.pager.ReusablePages()
 		res.PageChanges.RetiredPages = manager.pager.RetiredPages()
 	}()
 
@@ -233,7 +229,7 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (res A
 			if err = manager.applyCreateTableEvent(event); err != nil {
 				return
 			}
-			res.Stats.TablesCount = max(res.Stats.TablesCount, event.TableID+1)
+			res.SchemaChanges.CreatedTables = append(res.SchemaChanges.CreatedTables, TableID(event.TableID))
 
 		case *events.DropTable:
 			if err = manager.applyDropTableEvent(event); err != nil {

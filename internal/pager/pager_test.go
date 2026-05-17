@@ -26,8 +26,8 @@ func TestNewPager_InitialState(t *testing.T) {
 	if p.PagesCount() != 1 {
 		t.Errorf("expected PagesCount 1, got %d", p.PagesCount())
 	}
-	if !p.FreePages().Empty() {
-		t.Error("expected empty FreePages on fresh pager")
+	if !p.ReusablePages().Empty() {
+		t.Error("expected empty ReusablePages on fresh pager")
 	}
 	if !p.RetiredPages().Empty() {
 		t.Error("expected empty RetiredPages on fresh pager")
@@ -183,14 +183,14 @@ func TestPager_UpdatePage_OverwritesExistingPage(t *testing.T) {
 
 // --- FreePage ---
 
-func TestPager_FreePage_OwnedPageMovesToFree(t *testing.T) {
+func TestPager_FreePage_OwnedPageMovesToReusable(t *testing.T) {
 	p := NewPager(makeStorage(), 1, testPageSize)
 	ptr := p.CreatePage(pageData("first page")) // ptr is added to OwnedPages
 
 	p.FreePage(ptr)
 
-	if !p.FreePages().Has(ptr) {
-		t.Errorf("expected freed owned page %d in FreePages", ptr)
+	if !p.ReusablePages().Has(ptr) {
+		t.Errorf("expected freed owned page %d in ReusablePages", ptr)
 	}
 }
 
@@ -204,8 +204,8 @@ func TestPager_FreePage_NonOwnedPageMovesToRetired(t *testing.T) {
 	if !p.RetiredPages().Has(0) {
 		t.Error("expected non-owned page 0 in RetiredPages after FreePage")
 	}
-	if p.FreePages().Has(0) {
-		t.Error("expected page 0 NOT in FreePages")
+	if p.ReusablePages().Has(0) {
+		t.Error("expected page 0 NOT in ReusablePages")
 	}
 }
 
@@ -232,10 +232,10 @@ func TestPager_RetiredPages_EmptyInitially(t *testing.T) {
 	}
 }
 
-func TestPager_FreePages_EmptyInitially(t *testing.T) {
+func TestPager_ReusablePages_EmptyInitially(t *testing.T) {
 	p := NewPager(makeStorage(), 1, testPageSize)
-	if !p.FreePages().Empty() {
-		t.Error("expected empty FreePages on fresh pager")
+	if !p.ReusablePages().Empty() {
+		t.Error("expected empty ReusablePages on fresh pager")
 	}
 }
 
@@ -323,8 +323,8 @@ func TestPager_Restore_ResetsOwnedAndFree(t *testing.T) {
 
 	p.Restore(snap)
 
-	if p.FreePages().Has(ptr) {
-		t.Errorf("expected FreePages to not contain page %d after restore", ptr)
+	if p.ReusablePages().Has(ptr) {
+		t.Errorf("expected ReusablePages to not contain page %d after restore", ptr)
 	}
 }
 
