@@ -102,9 +102,9 @@ func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
 	return table, nil
 }
 
-func (tx *Transaction) DeleteTable(tableName string) error {
-	if err := tx.manager.DeleteTable(tableName); err != nil {
-		return fmt.Errorf("Transaction: couldn't delete table %s because of error during deleting table: %w", tableName, err)
+func (tx *Transaction) DropTable(tableName string) error {
+	if err := tx.manager.DropTable(tableName); err != nil {
+		return fmt.Errorf("Transaction: couldn't drop table %s because of error during dropping table: %w", tableName, err)
 	}
 
 	return nil

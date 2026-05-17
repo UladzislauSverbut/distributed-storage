@@ -16,11 +16,11 @@ type PagerConfig struct {
 }
 
 type PagerState struct {
-	PagesCount     PagePointer            // Number of all pages in the pager
-	AvailablePages PageList               // List  of pages that are not reachable by others and could be mutated
-	ReusablePages  PageList               // List of pages that can be reused by others
-	ReleasedPages  PageList               // List of pages that were released and cannot be overwritten due to immutability
-	pageUpdates    map[PagePointer][]byte // Map of page updates that will be synced with storage
+	PagesCount   PagesCount             // Number of all pages in the pager
+	OwnedPages   PageList               // Pages owned by this pager and safe for in-place mutation.
+	FreePages    PageList               // Pages not currently in use but owned by this pager.
+	RetiredPages PageList               // Pages no longer owned by this pager instance.
+	pageUpdates  map[PagePointer][]byte // Map of page updates that will be synced with storage
 }
 
 type Pager struct {
@@ -29,10 +29,13 @@ type Pager struct {
 	state   PagerState
 }
 
-func NewPager(storage store.Storage, pagesCount PagesCount, pageSize PageSize, availablePages ...PageList) *Pager {
-	pages := NewPageList()
-	if len(availablePages) > 0 {
-		pages = availablePages[0]
+func NewPager(storage store.Storage, pagesCount PagesCount, pageSize PageSize, pages ...PageList) *Pager {
+	var owned PageList
+
+	if len(pages) > 0 {
+		owned = pages[0]
+	} else {
+		owned = NewPageList()
 	}
 
 	return &Pager{
@@ -41,11 +44,11 @@ func NewPager(storage store.Storage, pagesCount PagesCount, pageSize PageSize, a
 			pageSize: pageSize,
 		},
 		state: PagerState{
-			PagesCount:     pagesCount,
-			AvailablePages: pages.Clone(),
-			ReusablePages:  pages.Clone(),
-			ReleasedPages:  NewPageList(),
-			pageUpdates:    map[PagePointer][]byte{},
+			PagesCount:   pagesCount,
+			OwnedPages:   owned.Clone(),
+			FreePages:    owned.Clone(),
+			RetiredPages: NewPageList(),
+			pageUpdates:  map[PagePointer][]byte{},
 		},
 	}
 }
@@ -70,11 +73,11 @@ func (pager *Pager) UpdatePage(pointer PagePointer, data []byte) error {
 func (pager *Pager) CreatePage(data []byte) PagePointer {
 	var pagePointer PagePointer
 
-	if availablePage, ok := pager.state.ReusablePages.Pop(); ok {
+	if availablePage, ok := pager.state.FreePages.Pop(); ok {
 		pagePointer = availablePage
 	} else {
 		pagePointer = pager.state.PagesCount
-		pager.state.AvailablePages.Add(pagePointer)
+		pager.state.OwnedPages.Add(pagePointer)
 
 		pager.state.PagesCount++
 	}
@@ -84,22 +87,22 @@ func (pager *Pager) CreatePage(data []byte) PagePointer {
 }
 
 func (pager *Pager) FreePage(pointer PagePointer) {
-	// If released page was in page pool we can return it to reusable pages because nobody can reference this page
-	if pager.state.AvailablePages.Has(pointer) {
-		pager.state.ReusablePages.Add(pointer)
+	// If page was in mutable pool we can return it to freed pages because we can mutate it later
+	if pager.state.OwnedPages.Has(pointer) {
+		pager.state.FreePages.Add(pointer)
 	} else {
-		pager.state.ReleasedPages.Add(pointer)
+		pager.state.RetiredPages.Add(pointer)
 	}
 
 	delete(pager.state.pageUpdates, pointer)
 }
 
-func (pager *Pager) ReleasedPages() PageList {
-	return pager.state.ReleasedPages
+func (pager *Pager) RetiredPages() PageList {
+	return pager.state.RetiredPages
 }
 
-func (pager *Pager) ReusablePages() PageList {
-	return pager.state.ReusablePages
+func (pager *Pager) FreePages() PageList {
+	return pager.state.FreePages
 }
 
 func (pager *Pager) PagesCount() uint64 {
@@ -136,11 +139,11 @@ func (pager *Pager) Snapshot() PagerState {
 	}
 
 	return PagerState{
-		PagesCount:     pager.state.PagesCount,
-		AvailablePages: pager.state.AvailablePages.Clone(),
-		ReusablePages:  pager.state.ReusablePages.Clone(),
-		ReleasedPages:  pager.state.ReleasedPages.Clone(),
-		pageUpdates:    pageUpdates,
+		PagesCount:   pager.state.PagesCount,
+		OwnedPages:   pager.state.OwnedPages.Clone(),
+		FreePages:    pager.state.FreePages.Clone(),
+		RetiredPages: pager.state.RetiredPages.Clone(),
+		pageUpdates:  pageUpdates,
 	}
 }
 
@@ -148,6 +151,6 @@ func (pager *Pager) Restore(state PagerState) {
 	pager.state = state
 }
 
-func (pager *Pager) Fork(nextPageID PagePointer, availablePages ...PageList) *Pager {
-	return NewPager(pager.storage, nextPageID, pager.config.pageSize, availablePages...)
+func (pager *Pager) Fork(nextPageID PagePointer, mutable ...PageList) *Pager {
+	return NewPager(pager.storage, nextPageID, pager.config.pageSize, mutable...)
 }

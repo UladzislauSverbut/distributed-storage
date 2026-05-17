@@ -26,11 +26,11 @@ func TestNewPager_InitialState(t *testing.T) {
 	if p.PagesCount() != 1 {
 		t.Errorf("expected PagesCount 1, got %d", p.PagesCount())
 	}
-	if !p.ReusablePages().Empty() {
-		t.Error("expected empty ReusablePages on fresh pager")
+	if !p.FreePages().Empty() {
+		t.Error("expected empty FreePages on fresh pager")
 	}
-	if !p.ReleasedPages().Empty() {
-		t.Error("expected empty ReleasedPages on fresh pager")
+	if !p.RetiredPages().Empty() {
+		t.Error("expected empty RetiredPages on fresh pager")
 	}
 }
 
@@ -183,29 +183,29 @@ func TestPager_UpdatePage_OverwritesExistingPage(t *testing.T) {
 
 // --- FreePage ---
 
-func TestPager_FreePage_AvailablePageMovesToReusable(t *testing.T) {
+func TestPager_FreePage_OwnedPageMovesToFree(t *testing.T) {
 	p := NewPager(makeStorage(), 1, testPageSize)
-	ptr := p.CreatePage(pageData("first page")) // ptr is added to AvailablePages
+	ptr := p.CreatePage(pageData("first page")) // ptr is added to OwnedPages
 
 	p.FreePage(ptr)
 
-	if !p.ReusablePages().Has(ptr) {
-		t.Errorf("expected freed available page %d in ReusablePages", ptr)
+	if !p.FreePages().Has(ptr) {
+		t.Errorf("expected freed owned page %d in FreePages", ptr)
 	}
 }
 
-func TestPager_FreePage_NonAvailablePageMovesToReleased(t *testing.T) {
-	// pagesCount=2 means pages 0 and 1 exist but are NOT in AvailablePages
+func TestPager_FreePage_NonOwnedPageMovesToRetired(t *testing.T) {
+	// pagesCount=2 means pages 0 and 1 exist but are NOT in OwnedPages
 	// (they were never allocated through CreatePage).
 	p := NewPager(makeStorage(), 2, testPageSize)
 
-	p.FreePage(0) // page 0 is not in AvailablePages
+	p.FreePage(0) // page 0 is not in OwnedPages
 
-	if !p.ReleasedPages().Has(0) {
-		t.Error("expected non-available page 0 in ReleasedPages after FreePage")
+	if !p.RetiredPages().Has(0) {
+		t.Error("expected non-owned page 0 in RetiredPages after FreePage")
 	}
-	if p.ReusablePages().Has(0) {
-		t.Error("expected page 0 NOT in ReusablePages")
+	if p.FreePages().Has(0) {
+		t.Error("expected page 0 NOT in FreePages")
 	}
 }
 
@@ -225,17 +225,17 @@ func TestPager_FreePage_RemovesFromPageUpdates(t *testing.T) {
 
 // --- ReleasedPages / ReusablePages ---
 
-func TestPager_ReleasedPages_EmptyInitially(t *testing.T) {
+func TestPager_RetiredPages_EmptyInitially(t *testing.T) {
 	p := NewPager(makeStorage(), 1, testPageSize)
-	if !p.ReleasedPages().Empty() {
-		t.Error("expected empty ReleasedPages on fresh pager")
+	if !p.RetiredPages().Empty() {
+		t.Error("expected empty RetiredPages on fresh pager")
 	}
 }
 
-func TestPager_ReusablePages_EmptyInitially(t *testing.T) {
+func TestPager_FreePages_EmptyInitially(t *testing.T) {
 	p := NewPager(makeStorage(), 1, testPageSize)
-	if !p.ReusablePages().Empty() {
-		t.Error("expected empty ReusablePages on fresh pager")
+	if !p.FreePages().Empty() {
+		t.Error("expected empty FreePages on fresh pager")
 	}
 }
 
@@ -315,7 +315,7 @@ func TestPager_Restore_ResetsPagesCount(t *testing.T) {
 	}
 }
 
-func TestPager_Restore_ResetsAvailableAndReusable(t *testing.T) {
+func TestPager_Restore_ResetsOwnedAndFree(t *testing.T) {
 	p := NewPager(makeStorage(), 1, testPageSize)
 	snap := p.Snapshot() // snapshot before any pages created
 
@@ -323,8 +323,8 @@ func TestPager_Restore_ResetsAvailableAndReusable(t *testing.T) {
 
 	p.Restore(snap)
 
-	if p.ReusablePages().Has(ptr) {
-		t.Errorf("expected ReusablePages to not contain page %d after restore", ptr)
+	if p.FreePages().Has(ptr) {
+		t.Errorf("expected FreePages to not contain page %d after restore", ptr)
 	}
 }
 
@@ -342,14 +342,14 @@ func TestPager_Snapshot_IsIndependentOfOriginal(t *testing.T) {
 	}
 }
 
-func TestPager_Snapshot_AvailablePagesIsIndependent(t *testing.T) {
+func TestPager_Snapshot_OwnedPagesIsIndependent(t *testing.T) {
 	p := NewPager(makeStorage(), 1, testPageSize)
 	snap := p.Snapshot()
 
 	ptr := p.CreatePage(pageData("first page"))
 	_ = ptr
 
-	if snap.AvailablePages.Has(ptr) {
-		t.Errorf("snapshot AvailablePages was mutated to include page %d", ptr)
+	if snap.OwnedPages.Has(ptr) {
+		t.Errorf("snapshot OwnedPages was mutated to include page %d", ptr)
 	}
 }

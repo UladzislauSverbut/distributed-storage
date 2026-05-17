@@ -14,21 +14,27 @@ const HEADER_SIZE = len(DB_STORAGE_SIGNATURE) + 32
 const HEADER_PAGE = pager.PagePointer(0)
 const CATALOG_TABLE_ID = TableID(0)
 
-var catalogSchema = TableSchema{
-	Name:             "@catalog",
-	PrimaryIndex:     []string{"id"},
-	SecondaryIndexes: [][]string{{"name", "state"}},
-	IndexedColumns:   map[string]vals.ValueType{"id": vals.TYPE_UINT64, "name": vals.TYPE_STRING, "state": vals.TYPE_UINT32},
+type SchemaChanges struct {
+	DeletedTables []TableID
+}
+
+type TotalStats struct {
+	TablesCount uint64
+	PagesCount  uint64
+}
+
+type PageChanges struct {
+	FreePages    pager.PageList
+	RetiredPages pager.PageList
 }
 
 type ApplyResult struct {
 	Root            pager.PagePointer
 	DatabaseVersion DatabaseVersion
-	TablesCount     uint64
-	PagesCount      uint64
 
-	ReleasedPages pager.PageList
-	ReusablePages pager.PageList
+	Stats         TotalStats
+	PageChanges   PageChanges
+	SchemaChanges SchemaChanges
 }
 
 type TableManagerState struct {
@@ -44,6 +50,13 @@ type TableManager struct {
 	loadedTables map[TableID]*Table
 
 	pager *pager.Pager
+}
+
+var catalogSchema = TableSchema{
+	Name:             "@catalog",
+	PrimaryIndex:     []string{"id"},
+	SecondaryIndexes: [][]string{{"name", "state"}},
+	IndexedColumns:   map[string]vals.ValueType{"id": vals.TYPE_UINT64, "name": vals.TYPE_STRING, "state": vals.TYPE_UINT32},
 }
 
 func newTableManager(state TableManagerState, tableID TableIDAllocator, pager *pager.Pager) *TableManager {
@@ -206,9 +219,9 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (res A
 		}
 
 		res.Root = manager.catalog.Root()
-		res.ReleasedPages = manager.pager.ReleasedPages()
-		res.ReusablePages = manager.pager.ReusablePages()
-		res.PagesCount = manager.pager.PagesCount()
+		res.Stats.PagesCount = manager.pager.PagesCount()
+		res.PageChanges.FreePages = manager.pager.FreePages()
+		res.PageChanges.RetiredPages = manager.pager.RetiredPages()
 	}()
 
 	for _, changeEvent := range changeEvents {
@@ -220,12 +233,13 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (res A
 			if err = manager.applyCreateTableEvent(event); err != nil {
 				return
 			}
-			res.TablesCount = event.TableID + 1
+			res.Stats.TablesCount = max(res.Stats.TablesCount, event.TableID+1)
 
 		case *events.DropTable:
 			if err = manager.applyDropTableEvent(event); err != nil {
 				return
 			}
+			res.SchemaChanges.DeletedTables = append(res.SchemaChanges.DeletedTables, TableID(event.TableID))
 
 		case *events.DeleteEntry:
 			if err = manager.applyDeleteEntryEvent(event); err != nil {
