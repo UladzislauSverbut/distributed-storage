@@ -377,6 +377,7 @@ func (db *Database) recoverFromWAL() error {
 	for _, event := range restoredEvents {
 		if event, ok := event.(*events.FreePages); ok {
 			freePages.AddMany(event.List.Pages())
+		} else {
 			break
 		}
 	}

@@ -1,6 +1,6 @@
 package vals
 
-import "encoding/binary"
+import "distributed-storage/internal/encoding"
 
 type Uint32Value struct {
 	num uint32
@@ -19,16 +19,13 @@ func (value *Uint32Value) Equal(other Value) bool {
 }
 
 func (value *Uint32Value) Serialize() []byte {
-	serializedInt := make([]byte, 4)
-	binary.LittleEndian.PutUint32(serializedInt, value.num)
-
-	return serializedInt
+	return encoding.Uint32.Encode(value.num)
 }
 
 func (value *Uint32Value) Parse(data []byte) int {
-	value.num = binary.LittleEndian.Uint32(data)
-
-	return 4
+	v, size := encoding.Uint32.Decode(data)
+	value.num = v
+	return size
 }
 
 func NewUint32(value uint32) *Uint32Value {
@@ -38,10 +35,9 @@ func NewUint32(value uint32) *Uint32Value {
 func ParseUint32(data []byte) (*Uint32Value, int) {
 	value := &Uint32Value{}
 	size := value.Parse(data)
-
 	return value, size
 }
 
 func SerializeUint32(value uint32) []byte {
-	return NewUint32(value).Serialize()
+	return encoding.Uint32.Encode(value)
 }

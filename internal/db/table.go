@@ -23,10 +23,15 @@ const (
 type TableID uint64
 type TableState uint32
 
+type SecondaryIndex struct {
+	Name    string
+	Unique  bool
+	Columns []string
+}
 type TableSchema struct {
 	Name             string
 	PrimaryIndex     []string
-	SecondaryIndexes [][]string
+	SecondaryIndexes []SecondaryIndex
 	IndexedColumns   map[string]vals.ValueType
 }
 
@@ -356,7 +361,7 @@ func (table *Table) getPrimaryIndex(query *vals.Object) []byte {
 
 func (table *Table) getSecondaryIndex(query *vals.Object, secondaryIndexNumber int) []byte {
 	primaryIndexVals := query.GetMany(table.schema.PrimaryIndex)
-	secondaryIndexVals := query.GetMany(table.schema.SecondaryIndexes[secondaryIndexNumber])
+	secondaryIndexVals := query.GetMany(table.schema.SecondaryIndexes[secondaryIndexNumber].Columns)
 
 	if table.containsEmptyValues(primaryIndexVals) || table.containsEmptyValues(secondaryIndexVals) {
 		return nil
@@ -373,10 +378,10 @@ func (table *Table) getPartialIndex(query *vals.Object) ([]byte, bool) {
 	}
 
 	matchedSecondaryIndexNumber := 0
-	matchedSecondaryIndexVals := table.removeEmptyValues(query.GetMany(table.schema.SecondaryIndexes[matchedSecondaryIndexNumber]))
+	matchedSecondaryIndexVals := table.removeEmptyValues(query.GetMany(table.schema.SecondaryIndexes[matchedSecondaryIndexNumber].Columns))
 
 	for secondaryIndexNumber := 1; secondaryIndexNumber < len(table.schema.SecondaryIndexes); secondaryIndexNumber++ {
-		secondaryIndexVals := table.removeEmptyValues(query.GetMany(table.schema.SecondaryIndexes[secondaryIndexNumber]))
+		secondaryIndexVals := table.removeEmptyValues(query.GetMany(table.schema.SecondaryIndexes[secondaryIndexNumber].Columns))
 
 		if len(secondaryIndexVals) > len(matchedSecondaryIndexVals) {
 			matchedSecondaryIndexNumber = secondaryIndexNumber
@@ -414,11 +419,9 @@ func (table *Table) decodePayload(encodedPayload []byte) *vals.Object {
 		fieldName, size := vals.ParseString(encodedPayload)
 		encodedPayload = encodedPayload[size:]
 
-		fieldType := encodedPayload[0]
-		encodedPayload = encodedPayload[1:]
-
-		fieldValue, size := vals.ParseValue(fieldType, encodedPayload)
-		encodedPayload = encodedPayload[size:]
+		typeCode := vals.ValueType(encodedPayload[0])
+		fieldValue, size := vals.ParseValue(typeCode, encodedPayload[1:])
+		encodedPayload = encodedPayload[1+size:]
 
 		record.Set(fieldName.Value(), fieldValue)
 	}
@@ -436,6 +439,7 @@ func (table *Table) encodePrimaryIndex(values []vals.Value) []byte {
 	binary.LittleEndian.PutUint32(primaryIndex[0:INDEX_ID_SIZE], uint32(PRIMARY_INDEX_ID))
 
 	for _, value := range values {
+		primaryIndex = append(primaryIndex, byte(value.Type()))
 		primaryIndex = append(primaryIndex, value.Serialize()...)
 	}
 
@@ -452,10 +456,12 @@ func (table *Table) encodeSecondaryIndex(primaryIndexVals []vals.Value, secondar
 	binary.LittleEndian.PutUint32(secondaryIndex[0:INDEX_ID_SIZE], uint32(PRIMARY_INDEX_ID+secondaryIndexNumber+1))
 
 	for _, value := range secondaryIndexVals {
+		secondaryIndex = append(secondaryIndex, byte(value.Type()))
 		secondaryIndex = append(secondaryIndex, value.Serialize()...)
 	}
 
 	for _, value := range primaryIndexVals {
+		secondaryIndex = append(secondaryIndex, byte(value.Type()))
 		secondaryIndex = append(secondaryIndex, value.Serialize()...)
 	}
 
@@ -472,13 +478,13 @@ func (table *Table) decodeSecondaryIndex(encodedIndex []byte) (primaryIndexVals 
 
 	encodedIndex = encodedIndex[INDEX_ID_SIZE:]
 
-	for _, columnName := range table.schema.SecondaryIndexes[secondaryIndexNumber] {
+	for _, columnName := range table.schema.SecondaryIndexes[secondaryIndexNumber].Columns {
 		columnValue := vals.New(table.schema.IndexedColumns[columnName])
 		size := columnValue.Parse(encodedIndex[1:]) // skip type byte
 
 		secondaryIndexVals = append(secondaryIndexVals, columnValue)
 
-		encodedIndex = encodedIndex[size:]
+		encodedIndex = encodedIndex[1+size:]
 	}
 
 	for _, columnName := range table.schema.PrimaryIndex {
@@ -487,7 +493,7 @@ func (table *Table) decodeSecondaryIndex(encodedIndex []byte) (primaryIndexVals 
 
 		primaryIndexVals = append(primaryIndexVals, columnValue)
 
-		encodedIndex = encodedIndex[size:]
+		encodedIndex = encodedIndex[1+size:]
 	}
 
 	return

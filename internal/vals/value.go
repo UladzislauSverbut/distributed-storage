@@ -43,5 +43,6 @@ func New(valueType ValueType) Value {
 func ParseValue(valueType ValueType, data []byte) (Value, int) {
 	value := New(valueType)
 	size := value.Parse(data)
+
 	return value, size
 }

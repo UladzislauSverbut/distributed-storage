@@ -1,6 +1,6 @@
 package vals
 
-import "bytes"
+import "distributed-storage/internal/encoding"
 
 type StringValue struct {
 	str []byte
@@ -15,48 +15,17 @@ func (value *StringValue) Equal(other Value) bool {
 		return false
 	}
 
-	return bytes.Equal(value.str, other.(*StringValue).str)
+	return string(value.str) == other.(*StringValue).Value()
 }
 
 func (value *StringValue) Serialize() []byte {
-	escapeSymbolsCount := bytes.Count(value.str, []byte{0}) + bytes.Count(value.str, []byte{1})
-	serializedString := make([]byte, len(value.str)+escapeSymbolsCount+1)
-
-	serializedSymbolPosition := 0
-
-	for _, symbol := range value.str {
-		if symbol <= 1 {
-			serializedString[serializedSymbolPosition] = 0x01
-			serializedString[serializedSymbolPosition+1] = symbol + 1
-			serializedSymbolPosition += 2
-		} else {
-			serializedString[serializedSymbolPosition] = symbol
-			serializedSymbolPosition += 1
-		}
-	}
-
-	serializedString[serializedSymbolPosition] = 0
-
-	return serializedString
+	return encoding.String.Encode(string(value.str))
 }
 
-func (value *StringValue) Parse(serializedString []byte) int {
-	stringLength := bytes.Index(serializedString, []byte{0})
-	escapeSymbolsCount := bytes.Count(serializedString[:stringLength], []byte{0x01, 0x01}) + bytes.Count(serializedString[:stringLength], []byte{0x01, 0x02})
-
-	value.str = make([]byte, stringLength-escapeSymbolsCount)
-
-	for serializedSymbolPosition := 0; serializedSymbolPosition < stringLength; {
-		if serializedString[serializedSymbolPosition] == 0x01 && serializedString[serializedSymbolPosition+1] < 0x02 {
-			value.str[serializedSymbolPosition] = serializedString[serializedSymbolPosition+1] - 1
-			serializedSymbolPosition += 2
-		} else {
-			value.str[serializedSymbolPosition] = serializedString[serializedSymbolPosition]
-			serializedSymbolPosition += 1
-		}
-	}
-
-	return stringLength + 1
+func (value *StringValue) Parse(data []byte) int {
+	s, size := encoding.String.Decode(data)
+	value.str = []byte(s)
+	return size
 }
 
 func NewString(value string) *StringValue {
@@ -66,10 +35,9 @@ func NewString(value string) *StringValue {
 func ParseString(data []byte) (*StringValue, int) {
 	value := &StringValue{}
 	size := value.Parse(data)
-
 	return value, size
 }
 
 func SerializeString(value string) []byte {
-	return NewString(value).Serialize()
+	return encoding.String.Encode(value)
 }
