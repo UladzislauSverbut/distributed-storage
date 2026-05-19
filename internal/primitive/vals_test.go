@@ -1,4 +1,4 @@
-package vals
+package primitive
 
 import (
 	"bytes"

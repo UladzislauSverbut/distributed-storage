@@ -1,4 +1,4 @@
-package db
+package wal
 
 import (
 	"distributed-storage/internal/events"

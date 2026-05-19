@@ -1,11 +1,11 @@
-package vals
+package primitive
 
 type Object struct {
-	fields map[string]Value
+	fields map[string]Primitive
 }
 
-func (object *Object) GetMany(fields []string) []Value {
-	values := make([]Value, len(fields))
+func (object *Object) GetMany(fields []string) []Primitive {
+	values := make([]Primitive, len(fields))
 
 	for fieldIndex, field := range fields {
 		values[fieldIndex] = object.Get(field)
@@ -20,13 +20,13 @@ func (object *Object) Has(field string) bool {
 	return ok
 }
 
-func (object *Object) Set(field string, value Value) *Object {
+func (object *Object) Set(field string, value Primitive) *Object {
 	object.fields[field] = value
 
 	return object
 }
 
-func (object *Object) Get(field string) Value {
+func (object *Object) Get(field string) Primitive {
 	value, ok := object.fields[field]
 
 	if ok {
@@ -68,31 +68,31 @@ func (object *Object) Matches(other *Object) bool {
 }
 
 func (object *Object) GetString(field string) string {
-	return object.Get(field).(*StringValue).Value()
+	return object.Get(field).(*String).Value()
 }
 
 func (object *Object) GetUint32(field string) uint32 {
-	return object.Get(field).(*Uint32Value).Value()
+	return object.Get(field).(*Uint32).Value()
 }
 
 func (object *Object) GetUint64(field string) uint64 {
-	return object.Get(field).(*Uint64Value).Value()
+	return object.Get(field).(*Uint64).Value()
 }
 
 func (object *Object) GetInt32(field string) int32 {
-	return object.Get(field).(*Int32Value).Value()
+	return object.Get(field).(*Int32).Value()
 }
 
 func (object *Object) GetInt64(field string) int64 {
-	return object.Get(field).(*Int64Value).Value()
+	return object.Get(field).(*Int64).Value()
 }
 
-func (object *Object) Values() map[string]Value {
+func (object *Object) Values() map[string]Primitive {
 	return object.fields
 }
 
 func NewObject() *Object {
 	return &Object{
-		fields: make(map[string]Value),
+		fields: make(map[string]Primitive),
 	}
 }

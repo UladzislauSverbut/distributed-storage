@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"distributed-storage/internal/codec"
 	"distributed-storage/internal/events"
 	"distributed-storage/internal/kv"
 	"distributed-storage/internal/pager"
@@ -400,9 +401,8 @@ func (table *Table) encodePayload(record *vals.Object) []byte {
 	var encodedPayload []byte
 
 	for fieldName, fieldValue := range record.Values() {
-		encodedPayload = append(encodedPayload, vals.NewString(fieldName).Serialize()...)
-		encodedPayload = append(encodedPayload, fieldValue.Type())
-		encodedPayload = append(encodedPayload, fieldValue.Serialize()...)
+		encodedPayload = append(encodedPayload, codec.EncodeValue(vals.NewString(fieldName))...)
+		encodedPayload = append(encodedPayload, codec.EncodeValue(fieldValue)...)
 	}
 
 	return encodedPayload
@@ -416,14 +416,13 @@ func (table *Table) decodePayload(encodedPayload []byte) *vals.Object {
 	record := vals.NewObject()
 
 	for len(encodedPayload) > 0 {
-		fieldName, size := vals.ParseString(encodedPayload)
+		fieldName, size := codec.DecodeValue(encodedPayload)
 		encodedPayload = encodedPayload[size:]
 
-		typeCode := vals.ValueType(encodedPayload[0])
-		fieldValue, size := vals.ParseValue(typeCode, encodedPayload[1:])
-		encodedPayload = encodedPayload[1+size:]
+		fieldValue, size := codec.DecodeValue(encodedPayload)
+		encodedPayload = encodedPayload[size:]
 
-		record.Set(fieldName.Value(), fieldValue)
+		record.Set((fieldName.(*vals.StringValue).Value()), fieldValue)
 	}
 
 	return record
@@ -439,8 +438,7 @@ func (table *Table) encodePrimaryIndex(values []vals.Value) []byte {
 	binary.LittleEndian.PutUint32(primaryIndex[0:INDEX_ID_SIZE], uint32(PRIMARY_INDEX_ID))
 
 	for _, value := range values {
-		primaryIndex = append(primaryIndex, byte(value.Type()))
-		primaryIndex = append(primaryIndex, value.Serialize()...)
+		primaryIndex = append(primaryIndex, codec.EncodeValue(value)...)
 	}
 
 	return primaryIndex
@@ -456,13 +454,11 @@ func (table *Table) encodeSecondaryIndex(primaryIndexVals []vals.Value, secondar
 	binary.LittleEndian.PutUint32(secondaryIndex[0:INDEX_ID_SIZE], uint32(PRIMARY_INDEX_ID+secondaryIndexNumber+1))
 
 	for _, value := range secondaryIndexVals {
-		secondaryIndex = append(secondaryIndex, byte(value.Type()))
-		secondaryIndex = append(secondaryIndex, value.Serialize()...)
+		secondaryIndex = append(secondaryIndex, codec.EncodeValue(value)...)
 	}
 
 	for _, value := range primaryIndexVals {
-		secondaryIndex = append(secondaryIndex, byte(value.Type()))
-		secondaryIndex = append(secondaryIndex, value.Serialize()...)
+		secondaryIndex = append(secondaryIndex, codec.EncodeValue(value)...)
 	}
 
 	return secondaryIndex

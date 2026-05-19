@@ -28,7 +28,7 @@ func schemaWithSecondaryIndex() *TableSchema {
 	return &TableSchema{
 		Name:             "users",
 		PrimaryIndex:     []string{"id"},
-		SecondaryIndexes: [][]string{{"email"}},
+		SecondaryIndexes: []SecondaryIndex{{Columns: []string{"email"}}},
 		IndexedColumns: map[string]vals.ValueType{
 			"id":    vals.TYPE_UINT64,
 			"email": vals.TYPE_STRING,

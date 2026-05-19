@@ -1,12 +1,10 @@
-package db
+package wal
 
 import (
 	"bufio"
+	"distributed-storage/internal/codec"
 	"distributed-storage/internal/events"
 	"distributed-storage/internal/helpers"
-	"distributed-storage/internal/pager"
-	"encoding/binary"
-	"hash/crc32"
 	"io"
 	"iter"
 	"os"
@@ -16,34 +14,34 @@ import (
 	"fmt"
 )
 
-const SEGMENT_NAME_FORMAT = "segment_%010d.wal"
-const INITIAL_SEGMENT_ID SegmentID = 1
-
-type SegmentID uint64
+type WALConfig struct {
+	Directory        string
+	ArchiveDirectory string
+	SegmentSize      int
+}
 
 type WAL struct {
 	segment         *os.File
-	segmentID       SegmentID
-	segmentSize     int
-	segmentCapacity int
+	activeSegment   Segment
+	archiveSegments []Segment
+
+	lastEntryIndex EntryIndex
 
 	directory        string
 	archiveDirectory string
 
-	pendingLog     []byte
 	pendingArchive bool
 
-	mu sync.Mutex
+	mu sync.RWMutex
 }
 
-func newWAL(config DatabaseConfig) (*WAL, error) {
+func newWAL(config WALConfig) (*WAL, error) {
 	wal := &WAL{
-		segmentSize: config.WALSegmentSize,
+		segmentSize: config.SegmentSize,
 
-		directory:        config.WALDirectory,
-		archiveDirectory: config.WALArchiveDirectory,
+		directory:        config.Directory,
+		archiveDirectory: config.ArchiveDirectory,
 
-		pendingLog:     []byte{},
 		pendingArchive: false,
 	}
 
@@ -71,34 +69,23 @@ func newWAL(config DatabaseConfig) (*WAL, error) {
 	return wal, nil
 }
 
-func (wal *WAL) appendTransactions(transactions []TransactionCommit) {
-	if len(transactions) == 0 {
-		return
+func (wal *WAL) Append(data []byte) (EntryIndex, error) {
+	wal.mu.Lock()
+	defer wal.mu.Unlock()
+
+	entry := codec.EncodeWALEntry(uint64(wal.lastEntryIndex+1), data)
+
+	if _, err := wal.segment.Write(entry); err != nil {
+		return 0, fmt.Errorf("WAL: failed to append entry: %w", err)
 	}
 
-	for _, transaction := range transactions {
-		wal.appendEvent(events.NewStartTransaction())
+	wal.lastEntryIndex++
+	wal.segmentCapacity += len(entry)
 
-		for _, event := range transaction.ChangeEvents {
-			wal.appendEvent(event)
-		}
-
-		wal.appendEvent(events.NewCommitTransaction())
-	}
-}
-func (wal *WAL) appendFreePages(version DatabaseVersion, list pager.PageList) {
-	if list.Empty() {
-		return
-	}
-
-	wal.appendEvent(events.NewFreePages(uint64(version), list))
+	return wal.lastEntryIndex, nil
 }
 
-func (wal *WAL) appendVersionUpdate(version DatabaseVersion) {
-	wal.appendEvent(events.NewUpdateDBVersion(uint64(version)))
-}
-
-func (wal *WAL) eventsSince(version DatabaseVersion) ([]TableEvent, error) {
+func (wal *WAL) Scan(since EntryIndex) iter.Seq[Entry] {
 	wal.mu.Lock()         // Lock the WAL to prevent concurrent archiving current segment and closing files while reading changes.
 	defer wal.mu.Unlock() // This method is called during db initialization, so no need to worry about performance implications of locking here.
 
@@ -146,27 +133,12 @@ func (wal *WAL) eventsSince(version DatabaseVersion) ([]TableEvent, error) {
 	return helpers.Flatten(changes), nil
 }
 
-func (wal *WAL) appendEvent(event TableEvent) {
-	wal.pendingLog = append(wal.pendingLog, wal.encodeEvent(event)...)
-}
-
-func (wal *WAL) sync() error {
+func (wal *WAL) Sync() error {
 	wal.mu.Lock()
-
-	defer func() {
-		wal.pendingLog = []byte{}
-		wal.mu.Unlock()
-	}()
-
-	if _, err := wal.segment.Write(wal.pendingLog); err != nil {
-		return fmt.Errorf("WAL: failed to write WAL segment %w", err)
-	}
 
 	if err := wal.segment.Sync(); err != nil {
 		return fmt.Errorf("WAL: failed to sync WAL segment %w", err)
 	}
-
-	wal.segmentCapacity += len(wal.pendingLog)
 
 	if !wal.pendingArchive && wal.segmentFull(wal.segmentCapacity) {
 		wal.pendingArchive = true
@@ -176,54 +148,33 @@ func (wal *WAL) sync() error {
 	return nil
 }
 
-func (wal *WAL) empty() bool {
+func (wal *WAL) Empty() bool {
 	wal.mu.Lock()
 	defer wal.mu.Unlock()
 
 	return wal.segmentID == INITIAL_SEGMENT_ID && wal.segmentCapacity == 0
 }
 
-func (wal *WAL) encodeEvent(event TableEvent) []byte {
-	data := event.Serialize()
-	size := uint32(len(data))
+func (wal *WAL) Close() error {
+	wal.mu.Lock()
+	defer wal.mu.Unlock()
 
-	row := make([]byte, 8+size) // 8 Bytes for size and hash, then the event data
+	if err := wal.segment.Close(); err != nil {
+		return fmt.Errorf("WAL: failed to close segment file: %w", err)
+	}
 
-	binary.LittleEndian.PutUint32(row, size)
-	binary.LittleEndian.PutUint32(row[4:], crc32.ChecksumIEEE(data))
-
-	copy(row[8:], data)
-
-	return row
+	return nil
 }
 
-func (wal *WAL) decodeEvent(row []byte) (TableEvent, int, error) {
-	if len(row) < 8 {
-		return nil, 0, nil
+func (wal *WAL) lastIndex() (EntryIndex, error) {
+	var lastIndex EntryIndex
+
+	for event := range wal.scanSegment(wal.segment) {
+
 	}
-
-	size := binary.LittleEndian.Uint32(row)
-	hash := binary.LittleEndian.Uint32(row[4:8])
-
-	if len(row) < int(8+size) {
-		return nil, 0, nil
-	}
-
-	data := row[8 : size+8]
-
-	if crc32.ChecksumIEEE(data) != hash {
-		return nil, 0, fmt.Errorf("WAL: row checksum mismatch")
-	}
-
-	event, err := events.Parse(data)
-	if err != nil {
-		return nil, 0, fmt.Errorf("WAL: failed to deserialize event: %w", err)
-	}
-
-	return event, int(size) + 8, nil
 }
 
-func (wal *WAL) latestSegmentID(directory string) (SegmentID, bool, error) {
+func (wal *WAL) lastSegmentID(directory string) (SegmentID, bool, error) {
 	segmentID := INITIAL_SEGMENT_ID
 
 	entries, err := os.ReadDir(directory)
@@ -266,6 +217,45 @@ func (wal *WAL) openSegment(segmentID SegmentID, directory string) (segment *os.
 	return
 }
 
+func (wal *WAL) scanSegment(segment *os.File) iter.Seq[EntryIndex, []byte] {
+	return func(yield func(Entry) bool) {
+		const chunkSize = 4096 // Read the segment in chunks to avoid loading the entire file into memory
+
+		reader := bufio.NewReaderSize(segment, chunkSize)
+
+		accumulator := make([]byte, 0, 2*chunkSize)
+		chunk := make([]byte, chunkSize)
+
+		for {
+			readBytes, err := reader.Read(chunk)
+			accumulator = append(accumulator, chunk[:readBytes]...)
+
+			for len(accumulator) > 0 {
+				data, index, consumed, err := codec.DecodeWALEntry(accumulator)
+
+				if err != nil {
+					fmt.Printf("WAL: failed to decode event: %v\n", err)
+					return
+				}
+
+				if consumed == 0 {
+					break // Need to read more data to decode a full event
+				}
+
+				accumulator = accumulator[consumed:]
+
+				if !yield(event) {
+					return
+				}
+			}
+
+			if err == io.EOF {
+				return
+			}
+		}
+	}
+}
+
 func (wal *WAL) archiveSegment() error {
 	archivedSegment := wal.segment
 	archivedSegmentID := wal.segmentID
@@ -301,43 +291,4 @@ func (wal *WAL) segmentName(directory string, segmentID SegmentID) string {
 
 func (wal *WAL) segmentFull(capacity int) bool {
 	return capacity >= wal.segmentSize
-}
-
-func (wal *WAL) scanSegment(segment *os.File) iter.Seq[TableEvent] {
-	return func(yield func(TableEvent) bool) {
-		const chunkSize = 4096 // Read the segment in chunks to avoid loading the entire file into memory
-
-		reader := bufio.NewReaderSize(segment, chunkSize)
-
-		accumulator := make([]byte, 0, 2*chunkSize)
-		chunk := make([]byte, chunkSize)
-
-		for {
-			readBytes, err := reader.Read(chunk)
-			accumulator = append(accumulator, chunk[:readBytes]...)
-
-			for len(accumulator) > 0 {
-				event, consumed, err := wal.decodeEvent(accumulator)
-
-				if err != nil {
-					fmt.Printf("WAL: failed to decode event: %v\n", err)
-					return
-				}
-
-				if consumed == 0 {
-					break // Need to read more data to decode a full event
-				}
-
-				accumulator = accumulator[consumed:]
-
-				if !yield(event) {
-					return
-				}
-			}
-
-			if err == io.EOF {
-				return
-			}
-		}
-	}
 }

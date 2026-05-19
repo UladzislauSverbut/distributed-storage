@@ -51,7 +51,7 @@ type TableManager struct {
 var catalogSchema = TableSchema{
 	Name:             "@catalog",
 	PrimaryIndex:     []string{"id"},
-	SecondaryIndexes: [][]string{{"name", "state"}},
+	SecondaryIndexes: []SecondaryIndex{{Columns: []string{"name", "state"}}},
 	IndexedColumns:   map[string]vals.ValueType{"id": vals.TYPE_UINT64, "name": vals.TYPE_STRING, "state": vals.TYPE_UINT32},
 }
 
@@ -258,7 +258,7 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (res A
 			// These events are not related to table schema or entries, so we can ignore them during replay
 
 		default:
-			err = fmt.Errorf("ApplyChangeEvents: unknown event %q", event.Name())
+			err = fmt.Errorf("ApplyChangeEvents: unknown event %d", event.Type())
 			return
 		}
 	}
