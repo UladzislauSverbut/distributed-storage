@@ -1,259 +1,113 @@
 package wal
 
 import (
-	"bufio"
-	"distributed-storage/internal/codec"
-	"distributed-storage/internal/events"
-	"distributed-storage/internal/helpers"
-	"io"
-	"iter"
 	"os"
-	"slices"
 	"sync"
 
 	"fmt"
 )
 
+const INITIAL_ENTRY_INDEX EntryIndex = 0
+
 type WALConfig struct {
 	Directory        string
 	ArchiveDirectory string
-	SegmentSize      int
+	SegmentCapacity  int
 }
 
 type WAL struct {
-	segment         *os.File
-	activeSegment   Segment
-	archiveSegments []Segment
-
-	lastEntryIndex EntryIndex
+	buffer           [][]byte
+	segment          *Segment
+	lastSyncedEntry  EntryIndex
+	segmentArchiving bool
 
 	directory        string
 	archiveDirectory string
 
-	pendingArchive bool
-
-	mu sync.RWMutex
+	mu sync.Mutex
 }
 
 func newWAL(config WALConfig) (*WAL, error) {
 	wal := &WAL{
-		segmentSize: config.SegmentSize,
-
 		directory:        config.Directory,
 		archiveDirectory: config.ArchiveDirectory,
-
-		pendingArchive: false,
 	}
 
-	var err error
-	var segmentFound bool
-
-	if wal.segmentID, segmentFound, err = wal.latestSegmentID(wal.directory); err != nil { // We will reuse the latest active segment if it exists
-		return nil, fmt.Errorf("WAL: failed to find existing segment: %w", err)
+	segment, err := wal.latestSegment(wal.directory) // We will reuse the latest active segment if it exists
+	if err != nil {
+		return nil, fmt.Errorf("WAL: failed to find active segment: %w", err)
 	}
 
-	if !segmentFound { // If there is no existing active segment, check for the latest archived
-		if wal.segmentID, segmentFound, err = wal.latestSegmentID(wal.archiveDirectory); err != nil {
-			return nil, fmt.Errorf("WAL: failed to find existing segment in archive directory: %w", err)
-		}
-
-		if segmentFound {
-			wal.segmentID++ // Start with a new segment ID as the latest archived segment is considered full and should not be reused
-		}
+	if segment != nil {
+		wal.segment = segment
+		wal.entryIndex = segment.LastFlushed + 1
+		return wal, nil
 	}
 
-	if wal.segment, wal.segmentCapacity, err = wal.openSegment(wal.segmentID, wal.directory); err != nil {
-		return nil, fmt.Errorf("WAL: failed to open existing segment file: %w", err)
+	// If there is no existing active segment, check for the latest archived
+	segment, err = wal.latestSegment(wal.archiveDirectory)
+	if err != nil {
+		return nil, fmt.Errorf("WAL: failed to find archived segment: %w", err)
+	}
+
+	if segment != nil {
+		wal.entryIndex = segment.LastIndex + 1
+		go segment.Close() // Close the archived segment since we won't be using it
+	} else {
+		wal.entryIndex = INITIAL_ENTRY_INDEX
+	}
+
+	wal.segment, err = NewSegment(wal.entryIndex, wal.directory, config.SegmentCapacity)
+	if err != nil {
+		return nil, fmt.Errorf("WAL: failed to create new segment: %w", err)
 	}
 
 	return wal, nil
 }
 
-func (wal *WAL) Append(data []byte) (EntryIndex, error) {
+func (wal *WAL) Append(record []byte) {
+	wal.buffer = append(wal.buffer, record)
+}
+
+func (wal *WAL) Sync() (EntryIndex, error) {
 	wal.mu.Lock()
 	defer wal.mu.Unlock()
 
-	entry := codec.EncodeWALEntry(uint64(wal.lastEntryIndex+1), data)
-
-	if _, err := wal.segment.Write(entry); err != nil {
-		return 0, fmt.Errorf("WAL: failed to append entry: %w", err)
+	if err := wal.segment.Write(wal.buffer); err != nil {
+		return 0, fmt.Errorf("WAL: failed to write buffer to segment: %w", err)
 	}
 
-	wal.lastEntryIndex++
-	wal.segmentCapacity += len(entry)
+	if wal.segment.IsFull() && !wal.segmentArchiving {
+		wal.segmentArchiving = true
 
-	return wal.lastEntryIndex, nil
-}
-
-func (wal *WAL) Scan(since EntryIndex) iter.Seq[Entry] {
-	wal.mu.Lock()         // Lock the WAL to prevent concurrent archiving current segment and closing files while reading changes.
-	defer wal.mu.Unlock() // This method is called during db initialization, so no need to worry about performance implications of locking here.
-
-	segment := wal.segment
-	segmentID := wal.segmentID
-
-	var changes [][]TableEvent
-	changesFound := false
-
-	for {
-		var segmentChanges []TableEvent
-
-		for event := range wal.scanSegment(segment) {
-			segmentChanges = append(segmentChanges, event)
-
-			if versionEvent, ok := event.(*events.UpdateDBVersion); ok && versionEvent.Version == uint64(version) {
-				changesFound = true
-				segmentChanges = nil // Clear changes collected so far as they are from a previous version
-			}
-		}
-
-		changes = append(changes, segmentChanges)
-
-		if changesFound || segmentID == INITIAL_SEGMENT_ID { // If changes for the requested version are found or we have reached the initial segment, stop scanning further
-			break
-		}
-
-		nextSegment, _, err := wal.openSegment(segmentID-1, wal.archiveDirectory)
-		if err != nil {
-			return nil, fmt.Errorf("WAL: failed to open previous segment file: %w", err)
-		}
-
-		defer nextSegment.Close()
-
-		segment = nextSegment
-		segmentID -= 1
-	}
-
-	if !changesFound {
-		return nil, fmt.Errorf("WAL: no changes found for version %d", version)
-	}
-
-	slices.Reverse(changes)
-
-	return helpers.Flatten(changes), nil
-}
-
-func (wal *WAL) Sync() error {
-	wal.mu.Lock()
-
-	if err := wal.segment.Sync(); err != nil {
-		return fmt.Errorf("WAL: failed to sync WAL segment %w", err)
-	}
-
-	if !wal.pendingArchive && wal.segmentFull(wal.segmentCapacity) {
-		wal.pendingArchive = true
 		go wal.archiveSegment()
 	}
 
-	return nil
+	return wal.segment.LastFlushed, nil
 }
 
 func (wal *WAL) Empty() bool {
 	wal.mu.Lock()
 	defer wal.mu.Unlock()
 
-	return wal.segmentID == INITIAL_SEGMENT_ID && wal.segmentCapacity == 0
+	return wal.segment.LastFlushed == INITIAL_ENTRY_INDEX
 }
 
-func (wal *WAL) Close() error {
-	wal.mu.Lock()
-	defer wal.mu.Unlock()
-
-	if err := wal.segment.Close(); err != nil {
-		return fmt.Errorf("WAL: failed to close segment file: %w", err)
-	}
-
-	return nil
-}
-
-func (wal *WAL) lastIndex() (EntryIndex, error) {
-	var lastIndex EntryIndex
-
-	for event := range wal.scanSegment(wal.segment) {
-
-	}
-}
-
-func (wal *WAL) lastSegmentID(directory string) (SegmentID, bool, error) {
-	segmentID := INITIAL_SEGMENT_ID
-
+func (wal *WAL) latestSegment(directory string) (*Segment, error) {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
-		return segmentID, false, fmt.Errorf("WAL: failed to read directory: %w", err)
+		return nil, fmt.Errorf("WAL: failed to read %q directory: %w", directory, err)
 	}
 
 	for idx := len(entries) - 1; idx >= 0; idx-- {
 		entry := entries[idx]
 
-		if parsed, _ := fmt.Sscanf(entry.Name(), SEGMENT_NAME_FORMAT, &segmentID); parsed == 1 {
-			return segmentID, true, nil
+		if index, err := parseSegmentName(entry.Name()); err == nil {
+			return NewSegment(index, directory, wal.segment.Capacity)
 		}
 	}
 
-	return segmentID, false, nil
-}
-
-func (wal *WAL) openSegment(segmentID SegmentID, directory string) (segment *os.File, capacity int, err error) {
-	defer func() {
-		if err != nil && segment != nil {
-			segment.Close()
-		}
-	}()
-
-	if segment, err = os.OpenFile(wal.segmentName(directory, segmentID), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644); err != nil {
-		err = fmt.Errorf("WAL: failed to open segment file: %w", err)
-		return
-	}
-
-	stat, err := segment.Stat()
-
-	if err != nil {
-		err = fmt.Errorf("WAL: failed to stat segment file: %w", err)
-		return
-	}
-
-	capacity = int(stat.Size())
-
-	return
-}
-
-func (wal *WAL) scanSegment(segment *os.File) iter.Seq[EntryIndex, []byte] {
-	return func(yield func(Entry) bool) {
-		const chunkSize = 4096 // Read the segment in chunks to avoid loading the entire file into memory
-
-		reader := bufio.NewReaderSize(segment, chunkSize)
-
-		accumulator := make([]byte, 0, 2*chunkSize)
-		chunk := make([]byte, chunkSize)
-
-		for {
-			readBytes, err := reader.Read(chunk)
-			accumulator = append(accumulator, chunk[:readBytes]...)
-
-			for len(accumulator) > 0 {
-				data, index, consumed, err := codec.DecodeWALEntry(accumulator)
-
-				if err != nil {
-					fmt.Printf("WAL: failed to decode event: %v\n", err)
-					return
-				}
-
-				if consumed == 0 {
-					break // Need to read more data to decode a full event
-				}
-
-				accumulator = accumulator[consumed:]
-
-				if !yield(event) {
-					return
-				}
-			}
-
-			if err == io.EOF {
-				return
-			}
-		}
-	}
+	return nil, nil
 }
 
 func (wal *WAL) archiveSegment() error {
@@ -283,12 +137,4 @@ func (wal *WAL) archiveSegment() error {
 	}
 
 	return nil
-}
-
-func (wal *WAL) segmentName(directory string, segmentID SegmentID) string {
-	return fmt.Sprintf("%s/"+SEGMENT_NAME_FORMAT, directory, segmentID)
-}
-
-func (wal *WAL) segmentFull(capacity int) bool {
-	return capacity >= wal.segmentSize
 }
