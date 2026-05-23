@@ -2,6 +2,7 @@ package wal
 
 import (
 	"os"
+	"strings"
 	"sync"
 
 	"fmt"
@@ -18,7 +19,7 @@ type WALConfig struct {
 type WAL struct {
 	buffer           [][]byte
 	segment          *Segment
-	lastSyncedEntry  EntryIndex
+	syncedEntry      EntryIndex
 	segmentArchiving bool
 
 	directory        string
@@ -27,7 +28,7 @@ type WAL struct {
 	mu sync.Mutex
 }
 
-func newWAL(config WALConfig) (*WAL, error) {
+func NewWAL(config WALConfig) (*WAL, error) {
 	wal := &WAL{
 		directory:        config.Directory,
 		archiveDirectory: config.ArchiveDirectory,
@@ -40,7 +41,7 @@ func newWAL(config WALConfig) (*WAL, error) {
 
 	if segment != nil {
 		wal.segment = segment
-		wal.entryIndex = segment.LastFlushed + 1
+		wal.syncedEntry = segment.LastFlushed
 		return wal, nil
 	}
 
@@ -51,13 +52,13 @@ func newWAL(config WALConfig) (*WAL, error) {
 	}
 
 	if segment != nil {
-		wal.entryIndex = segment.LastIndex + 1
+		wal.syncedEntry = segment.LastFlushed
 		go segment.Close() // Close the archived segment since we won't be using it
 	} else {
-		wal.entryIndex = INITIAL_ENTRY_INDEX
+		wal.syncedEntry = INITIAL_ENTRY_INDEX
 	}
 
-	wal.segment, err = NewSegment(wal.entryIndex, wal.directory, config.SegmentCapacity)
+	wal.segment, err = NewSegment(wal.syncedEntry, wal.directory, config.SegmentCapacity)
 	if err != nil {
 		return nil, fmt.Errorf("WAL: failed to create new segment: %w", err)
 	}
@@ -110,31 +111,31 @@ func (wal *WAL) latestSegment(directory string) (*Segment, error) {
 	return nil, nil
 }
 
-func (wal *WAL) archiveSegment() error {
-	archivedSegment := wal.segment
-	archivedSegmentID := wal.segmentID
-	newSegmentID := wal.segmentID + 1
+func (wal *WAL) archiveSegment() {
+	wal.mu.Lock()
 
-	segment, capacity, err := wal.openSegment(newSegmentID, wal.directory)
+	archivedSegment := wal.segment
+	segment, err := NewSegment(wal.segment.LastFlushed, wal.directory, wal.segment.Capacity)
 
 	if err != nil {
-		return fmt.Errorf("WAL: failed to archive active segment: %w", err)
+		fmt.Printf("WAL: failed to create new segment during archive: %v\n", err)
+		wal.segmentArchiving = false
+		wal.mu.Unlock()
+		return
 	}
 
-	wal.mu.Lock()
 	wal.segment = segment
-	wal.segmentID = newSegmentID
-	wal.segmentCapacity = capacity
-	wal.pendingArchive = false
+	wal.segmentArchiving = false
 	wal.mu.Unlock()
 
-	if err := os.Rename(archivedSegment.Name(), wal.segmentName(wal.archiveDirectory, archivedSegmentID)); err != nil {
+	oldArchivedSegmentPath := archivedSegment.File.Name()
+	newArchivedSegmentPath := strings.Replace(oldArchivedSegmentPath, wal.directory, wal.archiveDirectory, 1)
+
+	if err := os.Rename(oldArchivedSegmentPath, newArchivedSegmentPath); err != nil {
 		fmt.Printf("WAL: failed to move archived segment to archive directory: %v\n", err)
 	}
 
 	if err := archivedSegment.Close(); err != nil {
 		fmt.Printf("WAL: failed to close archived segment: %v\n", err)
 	}
-
-	return nil
 }

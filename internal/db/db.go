@@ -6,6 +6,7 @@ import (
 	"distributed-storage/internal/helpers"
 	"distributed-storage/internal/pager"
 	"distributed-storage/internal/store"
+	"distributed-storage/internal/wal"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -91,7 +92,11 @@ func NewDatabase(config DatabaseConfig) (*Database, error) {
 
 	db.pager = pager.NewPager(db.storage, db.header.pagesCount, db.config.PageSize)
 
-	if db.wal, err = newWAL(config); err != nil {
+	if db.wal, err = wal.NewWAL(wal.WALConfig{
+		Directory:        db.config.WALDirectory,
+		ArchiveDirectory: db.config.WALArchiveDirectory,
+		SegmentCapacity:  db.config.WALSegmentSize,
+	}); err != nil {
 		return nil, fmt.Errorf("Database: failed to initialize WAL: %w", err)
 	}
 
