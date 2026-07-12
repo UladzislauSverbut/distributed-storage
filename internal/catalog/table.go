@@ -1,4 +1,4 @@
-package db
+package catalog
 
 import (
 	"bytes"
@@ -42,7 +42,7 @@ type Table struct {
 
 	kv           *kv.KeyValue
 	schema       *TableSchema
-	changeEvents []TableEvent
+	changeEvents []events.Event
 }
 
 func newTable(id TableID, root pager.PagePointer, pager *pager.Pager, schema *TableSchema) (*Table, error) {
@@ -302,7 +302,7 @@ func (table *Table) Schema() *TableSchema {
 	return table.schema
 }
 
-func (table *Table) ChangeEvents() []TableEvent {
+func (table *Table) ChangeEvents() []events.Event {
 	return table.changeEvents
 }
 
@@ -416,10 +416,10 @@ func (table *Table) decodePayload(encodedPayload []byte) *vals.Object {
 	record := vals.NewObject()
 
 	for len(encodedPayload) > 0 {
-		fieldName, size := codec.DecodeValue(encodedPayload)
+		fieldName, size, _ := codec.DecodeValue(encodedPayload)
 		encodedPayload = encodedPayload[size:]
 
-		fieldValue, size := codec.DecodeValue(encodedPayload)
+		fieldValue, size, _ := codec.DecodeValue(encodedPayload)
 		encodedPayload = encodedPayload[size:]
 
 		record.Set((fieldName.(*vals.StringValue).Value()), fieldValue)
@@ -474,22 +474,16 @@ func (table *Table) decodeSecondaryIndex(encodedIndex []byte) (primaryIndexVals 
 
 	encodedIndex = encodedIndex[INDEX_ID_SIZE:]
 
-	for _, columnName := range table.schema.SecondaryIndexes[secondaryIndexNumber].Columns {
-		columnValue := vals.New(table.schema.IndexedColumns[columnName])
-		size := columnValue.Parse(encodedIndex[1:]) // skip type byte
-
+	for range table.schema.SecondaryIndexes[secondaryIndexNumber].Columns {
+		columnValue, size, _ := codec.DecodeValue(encodedIndex)
 		secondaryIndexVals = append(secondaryIndexVals, columnValue)
-
-		encodedIndex = encodedIndex[1+size:]
+		encodedIndex = encodedIndex[size:]
 	}
 
-	for _, columnName := range table.schema.PrimaryIndex {
-		columnValue := vals.New(table.schema.IndexedColumns[columnName])
-		size := columnValue.Parse(encodedIndex[1:]) // skip type byte
-
+	for range table.schema.PrimaryIndex {
+		columnValue, size, _ := codec.DecodeValue(encodedIndex)
 		primaryIndexVals = append(primaryIndexVals, columnValue)
-
-		encodedIndex = encodedIndex[1+size:]
+		encodedIndex = encodedIndex[size:]
 	}
 
 	return

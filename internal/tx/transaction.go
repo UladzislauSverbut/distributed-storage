@@ -1,7 +1,8 @@
-package db
+package transaction
 
 import (
 	"context"
+	"distributed-storage/internal/catalog"
 	"fmt"
 	"sync/atomic"
 )
@@ -9,8 +10,8 @@ import (
 type TransactionState int32
 
 type TransactionCommit struct {
-	ReadEvents   []TableEvent
-	ChangeEvents []TableEvent
+	ReadEvents   []catalog.TableEvent
+	ChangeEvents []catalog.TableEvent
 	Response     chan<- TransactionCommitResponse
 }
 
@@ -22,7 +23,7 @@ type TransactionCommitResponse struct {
 type Transaction struct {
 	state atomic.Int32 // It's reference to TransactionState but with atomic operations support
 
-	manager     *TableManager
+	manager     *catalog.Catalog
 	commitQueue chan<- TransactionCommit
 	ctx         context.Context
 }
@@ -34,8 +35,14 @@ const (
 	TRANSACTION_ABORTED
 )
 
-func NewTransaction(db *Database, ctx context.Context) (*Transaction, error) {
-	return db.createTransaction(ctx)
+func NewTransaction(manager *catalog.Catalog, commitQueue chan<- TransactionCommit, ctx context.Context) *Transaction {
+	tx := &Transaction{
+		manager:     manager,
+		commitQueue: commitQueue,
+		ctx:         ctx,
+	}
+	tx.state.Store(int32(TRANSACTION_PROCESSING))
+	return tx
 }
 
 func (tx *Transaction) Commit() (err error) {
@@ -84,7 +91,7 @@ func (tx *Transaction) Rollback() {
 	tx.setAborted()
 }
 
-func (tx *Transaction) Table(tableName string) (*Table, error) {
+func (tx *Transaction) Table(tableName string) (*catalog.Table, error) {
 	table, err := tx.manager.Table(tableName)
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't get table %s: %w", tableName, err)
@@ -93,7 +100,7 @@ func (tx *Transaction) Table(tableName string) (*Table, error) {
 	return table, nil
 }
 
-func (tx *Transaction) CreateTable(schema *TableSchema) (*Table, error) {
+func (tx *Transaction) CreateTable(schema *catalog.TableSchema) (*catalog.Table, error) {
 	table, err := tx.manager.CreateTable(schema)
 	if err != nil {
 		return nil, fmt.Errorf("Transaction: couldn't create table %s because of error during creating table: %w", schema.Name, err)

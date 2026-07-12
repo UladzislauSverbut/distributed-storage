@@ -2,10 +2,12 @@ package db
 
 import (
 	"context"
+	"distributed-storage/internal/catalog"
 	"distributed-storage/internal/events"
 	"distributed-storage/internal/helpers"
 	"distributed-storage/internal/pager"
 	"distributed-storage/internal/store"
+	transaction "distributed-storage/internal/tx"
 	"distributed-storage/internal/wal"
 	"encoding/binary"
 	"errors"
@@ -17,7 +19,7 @@ import (
 )
 
 const DB_STORAGE_SIGNATURE = "DISTRIBUTED_DB_STORAGE" // Signature to identify and validate database storage file
-const INITIAL_DB_VERSION DatabaseVersion = 1
+const INITIAL_DB_VERSION catalog.DatabaseVersion = 1
 
 // Bytes
 const NUMBER_OF_PARALLEL_TRANSACTIONS = 1024 // Max number of parallel transactions
@@ -27,30 +29,28 @@ const TRANSACTION_TIMEOUT = 30 * time.Minute
 const COMMIT_INTERVAL = 1 * time.Millisecond
 const SYNC_INTERVAL = 100 * time.Millisecond
 
-type DatabaseVersion uint64
-
 type DatabaseHeader struct {
-	root        pager.PagePointer
-	version     DatabaseVersion
-	tablesCount uint64
-	pagesCount  uint64
+	root         pager.PagePointer
+	version      catalog.DatabaseVersion
+	allocatedIds uint64
+	pagesCount   uint64
+	walIndex     wal.EntryIndex
 }
 
-type TableIDAllocator func() TableID
+type IDAllocator func() uint64
 
 type Database struct {
 	header        *DatabaseHeader
-	syncedVersion DatabaseVersion
-	nextTableID   atomic.Uint64
+	syncedVersion catalog.DatabaseVersion
+	idAllocator   atomic.Uint64
 
 	wal     *WAL
 	pager   *pager.Pager
 	config  DatabaseConfig
 	storage store.Storage
 
-	pagePool     *helpers.MinMap[DatabaseVersion, pager.PageList]
-	transactions *helpers.MinMap[DatabaseVersion, *Transaction]
-	commitQueue  chan TransactionCommit
+	pagePool  *helpers.MinMap[catalog.DatabaseVersion, pager.PageList]
+	txManager *transaction.TransactionManager
 
 	mu sync.RWMutex
 }
@@ -70,10 +70,8 @@ func NewDatabase(config DatabaseConfig) (*Database, error) {
 	db := &Database{
 		config: config,
 
-		pagePool:     helpers.NewMinMap[DatabaseVersion, pager.PageList](func(i, j DatabaseVersion) bool { return i < j }),
-		transactions: helpers.NewMinMap[DatabaseVersion, *Transaction](func(i, j DatabaseVersion) bool { return i < j }),
-
-		commitQueue: make(chan TransactionCommit, NUMBER_OF_PARALLEL_TRANSACTIONS),
+		pagePool:  helpers.NewMinMap[catalog.DatabaseVersion, pager.PageList](func(i, j catalog.DatabaseVersion) bool { return i < j }),
+		txManager: transaction.NewTransactionManager(NUMBER_OF_PARALLEL_TRANSACTIONS),
 	}
 
 	var err error
@@ -92,7 +90,7 @@ func NewDatabase(config DatabaseConfig) (*Database, error) {
 
 	db.pager = pager.NewPager(db.storage, db.header.pagesCount, db.config.PageSize)
 
-	if db.wal, err = wal.NewWAL(wal.WALConfig{
+	if db.wal, err = newWAL(wal.WALConfig{
 		Directory:        db.config.WALDirectory,
 		ArchiveDirectory: db.config.WALArchiveDirectory,
 		SegmentCapacity:  db.config.WALSegmentSize,
@@ -110,37 +108,37 @@ func NewDatabase(config DatabaseConfig) (*Database, error) {
 	return db, nil
 }
 
-func (db *Database) StartTransaction(request func(*Transaction)) error {
+func (db *Database) Begin(ctx context.Context) *transaction.Transaction {
+	return db.txManager.Begin(db.catalog(), ctx)
+}
+
+func (db *Database) Run(request func(*transaction.Transaction) error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), TRANSACTION_TIMEOUT)
 	defer cancel()
 
-	transaction, err := db.createTransaction(ctx)
-	if err != nil {
+	tx := db.Begin(ctx)
+
+	if err := request(tx); err != nil {
+		tx.Rollback()
 		return err
 	}
 
-	request(transaction)
-
-	if err := transaction.Commit(); err != nil {
-		return err
-	}
-
-	return nil
+	return tx.Commit()
 }
 
 func (db *Database) runCommitLoop() {
-	transactions := make([]TransactionCommit, 0, COMMIT_BATCH_SIZE)
+	transactions := make([]transaction.TransactionCommit, 0, COMMIT_BATCH_SIZE)
 	ticker := time.NewTicker(COMMIT_INTERVAL)
 
 	for {
 		select {
-		case commit := <-db.commitQueue:
+		case commit := <-db.txManager.CommitQueue():
 			transactions = append(transactions, commit)
 
 			if len(transactions) == COMMIT_BATCH_SIZE {
 				ticker.Stop()
 				db.commitBatch(transactions)
-				transactions = make([]TransactionCommit, 0, COMMIT_BATCH_SIZE)
+				transactions = make([]transaction.TransactionCommit, 0, COMMIT_BATCH_SIZE)
 				ticker.Reset(COMMIT_INTERVAL)
 			}
 
@@ -148,7 +146,7 @@ func (db *Database) runCommitLoop() {
 			if len(transactions) > 0 {
 				ticker.Stop()
 				db.commitBatch(transactions)
-				transactions = make([]TransactionCommit, 0, COMMIT_BATCH_SIZE)
+				transactions = make([]transaction.TransactionCommit, 0, COMMIT_BATCH_SIZE)
 				ticker.Reset(COMMIT_INTERVAL)
 			}
 		}
@@ -175,15 +173,15 @@ func (db *Database) runSyncLoop() {
 	}
 }
 
-func (db *Database) commitBatch(transactions []TransactionCommit) {
-	latestUnreachableVersion := db.latestUnreachableVersion()
-	manager := db.tableManager(db.collectReleasedPages(latestUnreachableVersion))
+func (db *Database) commitBatch(transactions []transaction.TransactionCommit) {
+	latestUnreachableVersion := db.txManager.LatestUnreachableVersion(db.syncedVersion)
+	manager := db.catalog(db.collectReleasedPages(latestUnreachableVersion))
 
-	var abortedTransactions []TransactionCommit
-	var approvedTransactions []TransactionCommit
+	var abortedTransactions []transaction.TransactionCommit
+	var approvedTransactions []transaction.TransactionCommit
 
 	var (
-		applyResult ApplyResult
+		applyResult catalog.ApplyResult
 		err         error
 	)
 	for _, transaction := range transactions {
@@ -199,14 +197,14 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	pagesCount := applyResult.PageChanges.PagesCount
 
 	newHeader := &DatabaseHeader{
-		root:        applyResult.Root,
-		version:     db.header.version + 1,
-		tablesCount: db.nextTableID.Load(),
-		pagesCount:  pagesCount,
+		root:         applyResult.Root,
+		version:      db.header.version + 1,
+		allocatedIds: db.idAllocator.Load(),
+		pagesCount:   pagesCount,
 	}
 
 	if err := manager.Commit(db.serializeHeader(newHeader)); err != nil {
-		db.rejectTransactions(transactions, fmt.Errorf("Database: failed to commit changes: %w", err))
+		db.txManager.Reject(transactions, fmt.Errorf("Database: failed to commit changes: %w", err))
 		return
 	}
 
@@ -216,13 +214,15 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	db.wal.appendFreePages(latestUnreachableVersion, reusablePages) // These pages can be reused because they are not used by any active transaction (e.g. they were allocated and released in the same version)
 	db.wal.appendFreePages(db.header.version, retiredPages)         // These pages will be ready to safely reused only since next db version because they can be still used by active transactions in the current version
 
-	if err := db.wal.sync(); err != nil {
-		db.rejectTransactions(transactions, fmt.Errorf("Database: WAL flush failed: %w", err))
+	walIndex, err := db.wal.sync()
+	if err != nil {
+		db.txManager.Reject(transactions, fmt.Errorf("Database: WAL flush failed: %w", err))
 		return
 	}
+	newHeader.walIndex = walIndex
 
-	db.approveTransactions(approvedTransactions)
-	db.rejectTransactions(abortedTransactions, errors.New("Database: transaction aborted due to conflicts with other transactions"))
+	db.txManager.Approve(approvedTransactions)
+	db.txManager.Reject(abortedTransactions, errors.New("Database: transaction aborted due to conflicts with other transactions"))
 
 	db.releasePages(latestUnreachableVersion, reusablePages)
 	db.releasePages(db.header.version, retiredPages)
@@ -232,43 +232,7 @@ func (db *Database) commitBatch(transactions []TransactionCommit) {
 	db.header = newHeader
 }
 
-func (db *Database) rejectTransactions(transactions []TransactionCommit, err error) {
-	for _, transaction := range transactions {
-		transaction.Response <- TransactionCommitResponse{
-			Error:   err,
-			Success: false,
-		}
-	}
-}
-
-func (db *Database) approveTransactions(transactions []TransactionCommit) {
-	for _, transaction := range transactions {
-		transaction.Response <- TransactionCommitResponse{
-			Error:   nil,
-			Success: true,
-		}
-	}
-}
-
-func (db *Database) createTransaction(ctx context.Context) (*Transaction, error) {
-	manager := db.tableManager()
-
-	tx := &Transaction{
-		manager:     manager,
-		commitQueue: db.commitQueue,
-		ctx:         ctx,
-	}
-
-	tx.state.Store(int32(TRANSACTION_PROCESSING))
-
-	db.mu.Lock()
-	db.transactions.Add(manager.state.Version, tx)
-	db.mu.Unlock()
-
-	return tx, nil
-}
-
-func (db *Database) collectReleasedPages(target DatabaseVersion) pager.PageList {
+func (db *Database) collectReleasedPages(target catalog.DatabaseVersion) pager.PageList {
 	pageList := pager.NewPageList()
 
 	for {
@@ -283,39 +247,19 @@ func (db *Database) collectReleasedPages(target DatabaseVersion) pager.PageList 
 	}
 }
 
-func (db *Database) releasePages(version DatabaseVersion, list pager.PageList) {
+func (db *Database) releasePages(version catalog.DatabaseVersion, list pager.PageList) {
 	db.pagePool.Add(version, list)
 }
 
-func (db *Database) latestUnreachableVersion() DatabaseVersion {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	for {
-		version, transactions, ok := db.transactions.PeekMin()
-		if !ok {
-			return db.syncedVersion
-		}
-
-		for _, transaction := range transactions {
-			if transaction.IsActive() {
-				return min(version-1, db.syncedVersion)
-			}
-		}
-
-		db.transactions.PopMin()
-	}
-}
-
 func (db *Database) readHeader() (*DatabaseHeader, error) {
-	headerBlock := pager.NewPager(db.storage, 1, db.config.PageSize).Page(HEADER_PAGE)
+	headerBlock := pager.NewPager(db.storage, 1, db.config.PageSize).Page(pager.PagePointer(0))
 	signature := headerBlock[0:len(DB_STORAGE_SIGNATURE)]
 
 	header := &DatabaseHeader{
-		root:        pager.NULL_PAGE,
-		version:     INITIAL_DB_VERSION,
-		pagesCount:  1, // Reserve 1 page for header
-		tablesCount: 1, // Reserve 0 table for @catalog table
+		root:         pager.NULL_PAGE,
+		version:      INITIAL_DB_VERSION,
+		pagesCount:   1, // Reserve 1 page for header
+		allocatedIds: 1, // Reserve 0 table for @catalog table
 	}
 
 	if helpers.IsZero(signature) {
@@ -329,22 +273,24 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 	signatureSize := len(DB_STORAGE_SIGNATURE)
 
 	header.root = pager.PagePointer(binary.LittleEndian.Uint64(headerBlock[signatureSize : signatureSize+8]))
-	header.version = DatabaseVersion(binary.LittleEndian.Uint64(headerBlock[signatureSize+8 : signatureSize+16]))
+	header.version = catalog.DatabaseVersion(binary.LittleEndian.Uint64(headerBlock[signatureSize+8 : signatureSize+16]))
 	header.pagesCount = binary.LittleEndian.Uint64(headerBlock[signatureSize+16 : signatureSize+24])
-	header.tablesCount = binary.LittleEndian.Uint64(headerBlock[signatureSize+24 : signatureSize+32])
+	header.allocatedIds = binary.LittleEndian.Uint64(headerBlock[signatureSize+24 : signatureSize+32])
+	header.walIndex = wal.EntryIndex(binary.LittleEndian.Uint64(headerBlock[signatureSize+32 : signatureSize+40]))
 
 	return header, nil
 }
 
 func (db *Database) serializeHeader(header *DatabaseHeader) []byte {
-	headerBlock := make([]byte, HEADER_SIZE)
+	headerBlock := make([]byte, len(DB_STORAGE_SIGNATURE)+40)
 	signatureSize := len(DB_STORAGE_SIGNATURE)
 
 	copy(headerBlock[0:signatureSize], []byte(DB_STORAGE_SIGNATURE))
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize:signatureSize+8], uint64(header.root))
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize+8:signatureSize+16], uint64(header.version))
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize+16:signatureSize+24], uint64(header.pagesCount))
-	binary.LittleEndian.PutUint64(headerBlock[signatureSize+24:signatureSize+32], uint64(header.tablesCount))
+	binary.LittleEndian.PutUint64(headerBlock[signatureSize+24:signatureSize+32], uint64(header.allocatedIds))
+	binary.LittleEndian.PutUint64(headerBlock[signatureSize+32:signatureSize+40], uint64(header.walIndex))
 
 	return headerBlock
 }
@@ -360,18 +306,20 @@ func (db *Database) init() error {
 func (db *Database) initWAL() error {
 	db.wal.appendVersionUpdate(db.header.version)
 
-	if err := db.wal.sync(); err != nil {
+	walIndex, err := db.wal.sync()
+	if err != nil {
 		return fmt.Errorf("Database: failed to flush WAL after setup: %w", err)
 	}
 
+	db.header.walIndex = walIndex
 	db.syncedVersion = db.header.version
-	db.nextTableID.Store(db.header.tablesCount)
+	db.idAllocator.Store(db.header.allocatedIds)
 
 	return nil
 }
 
 func (db *Database) recoverFromWAL() error {
-	restoredEvents, err := db.wal.eventsSince(db.header.version)
+	restoredEvents, walIndex, err := db.wal.eventsSince(db.header.version)
 	if err != nil {
 		return fmt.Errorf("Database: failed to get latest database version from WAL: %w", err)
 	}
@@ -387,7 +335,7 @@ func (db *Database) recoverFromWAL() error {
 		}
 	}
 
-	manager := db.tableManager(freePages)
+	manager := db.catalog(freePages)
 
 	applyResult, err := manager.ApplyChangeEvents(restoredEvents)
 	if err != nil {
@@ -399,7 +347,7 @@ func (db *Database) recoverFromWAL() error {
 	db.header.pagesCount = applyResult.PageChanges.PagesCount
 
 	if len(applyResult.SchemaChanges.CreatedTables) > 0 {
-		db.header.tablesCount = uint64(slices.Max(applyResult.SchemaChanges.CreatedTables)) + 1
+		db.header.allocatedIds = uint64(slices.Max(applyResult.SchemaChanges.CreatedTables)) + 1
 	}
 
 	if err := manager.Commit(db.serializeHeader(db.header)); err != nil {
@@ -410,21 +358,22 @@ func (db *Database) recoverFromWAL() error {
 		return fmt.Errorf("Database: failed to flush restored tables from WAL: %w", err)
 	}
 
+	db.header.walIndex = walIndex
 	db.syncedVersion = db.header.version
-	db.nextTableID.Store(db.header.tablesCount)
+	db.idAllocator.Store(db.header.allocatedIds)
 
 	return nil
 }
 
-func (db *Database) tableManager(freePages ...pager.PageList) *TableManager {
+func (db *Database) catalog(freePages ...pager.PageList) *catalog.Catalog {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	state := TableManagerState{Root: db.header.root, Version: db.header.version}
+	state := catalog.CatalogState{Root: db.header.root, Version: db.header.version}
 
-	return newTableManager(
+	return catalog.NewCatalog(
 		state,
-		func() TableID { return TableID(db.nextTableID.Add(1) - 1) },
+		func() uint64 { return db.idAllocator.Add(1) - 1 },
 		db.pager.Fork(db.header.pagesCount, freePages...),
 	)
 }

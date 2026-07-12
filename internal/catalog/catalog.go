@@ -1,4 +1,4 @@
-package db
+package catalog
 
 import (
 	"bytes"
@@ -10,8 +10,10 @@ import (
 	"fmt"
 )
 
-const HEADER_SIZE = len(DB_STORAGE_SIGNATURE) + 32
-const HEADER_PAGE = pager.PagePointer(0)
+type DatabaseVersion uint64
+type IDAllocator func() uint64
+type TableEvent = events.Event
+
 const CATALOG_TABLE_ID = TableID(0)
 
 type SchemaChanges struct {
@@ -33,14 +35,14 @@ type ApplyResult struct {
 	SchemaChanges SchemaChanges
 }
 
-type TableManagerState struct {
+type CatalogState struct {
 	Root    pager.PagePointer
 	Version DatabaseVersion
 }
 
-type TableManager struct {
-	state   TableManagerState
-	tableID TableIDAllocator
+type Catalog struct {
+	state       CatalogState
+	idAllocator IDAllocator
 
 	catalog      *Table
 	loadedTables map[TableID]*Table
@@ -55,15 +57,15 @@ var catalogSchema = TableSchema{
 	IndexedColumns:   map[string]vals.ValueType{"id": vals.TYPE_UINT64, "name": vals.TYPE_STRING, "state": vals.TYPE_UINT32},
 }
 
-func newTableManager(state TableManagerState, tableID TableIDAllocator, pager *pager.Pager) *TableManager {
+func NewCatalog(state CatalogState, idAllocator IDAllocator, pager *pager.Pager) *Catalog {
 	catalog, err := newTable(CATALOG_TABLE_ID, state.Root, pager, &catalogSchema)
 	if err != nil {
-		panic(fmt.Sprintf("newTableManager: couldn't initialize catalog: %v", err))
+		panic(fmt.Sprintf("newCatalog: couldn't initialize catalog: %v", err))
 	}
 
-	return &TableManager{
-		state:   state,
-		tableID: tableID,
+	return &Catalog{
+		state:       state,
+		idAllocator: idAllocator,
 
 		catalog:      catalog,
 		loadedTables: make(map[TableID]*Table),
@@ -72,7 +74,11 @@ func newTableManager(state TableManagerState, tableID TableIDAllocator, pager *p
 	}
 }
 
-func (manager *TableManager) Table(name string) (*Table, error) {
+func (manager *Catalog) Version() DatabaseVersion {
+	return manager.state.Version
+}
+
+func (manager *Catalog) Table(name string) (*Table, error) {
 	for _, table := range manager.loadedTables {
 		if table.schema.Name == name {
 			return table, nil
@@ -97,7 +103,7 @@ func (manager *TableManager) Table(name string) (*Table, error) {
 	return table, nil
 }
 
-func (manager *TableManager) TableByID(id TableID) (*Table, error) {
+func (manager *Catalog) TableByID(id TableID) (*Table, error) {
 	if table, ok := manager.loadedTables[id]; ok {
 		return table, nil
 	}
@@ -120,7 +126,7 @@ func (manager *TableManager) TableByID(id TableID) (*Table, error) {
 	return table, nil
 }
 
-func (manager *TableManager) UpdateTable(table *Table) error {
+func (manager *Catalog) UpdateTable(table *Table) error {
 	record := manager.encodeTable(table)
 
 	oldRecord, err := manager.catalog.Update(record)
@@ -139,7 +145,7 @@ func (manager *TableManager) UpdateTable(table *Table) error {
 	return nil
 }
 
-func (manager *TableManager) CreateTable(schema *TableSchema) (*Table, error) {
+func (manager *Catalog) CreateTable(schema *TableSchema) (*Table, error) {
 	table, err := manager.Table(schema.Name)
 	if err != nil {
 		return nil, fmt.Errorf("CreateTable %q: couldn't check if table already exists: %w", schema.Name, err)
@@ -148,7 +154,7 @@ func (manager *TableManager) CreateTable(schema *TableSchema) (*Table, error) {
 		return nil, fmt.Errorf("CreateTable %q: table already exists", schema.Name)
 	}
 
-	table, err = newTable(manager.tableID(), pager.NULL_PAGE, manager.pager, schema)
+	table, err = newTable(TableID(manager.idAllocator()), pager.NULL_PAGE, manager.pager, schema)
 	if err != nil {
 		return nil, fmt.Errorf("CreateTable %q: couldn't initialize table: %w", schema.Name, err)
 	}
@@ -168,7 +174,7 @@ func (manager *TableManager) CreateTable(schema *TableSchema) (*Table, error) {
 	return table, nil
 }
 
-func (manager *TableManager) DropTable(name string) error {
+func (manager *Catalog) DropTable(name string) error {
 	table, err := manager.Table(name)
 	if err != nil {
 		return fmt.Errorf("DropTable %q: couldn't check if table exists: %w", name, err)
@@ -190,7 +196,7 @@ func (manager *TableManager) DropTable(name string) error {
 	return nil
 }
 
-func (manager *TableManager) ChangeEvents() []TableEvent {
+func (manager *Catalog) ChangeEvents() []events.Event {
 	var events []TableEvent
 
 	for _, table := range manager.loadedTables {
@@ -203,7 +209,7 @@ func (manager *TableManager) ChangeEvents() []TableEvent {
 	return events
 }
 
-func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (res ApplyResult, err error) {
+func (manager *Catalog) ApplyChangeEvents(changeEvents []events.Event) (res ApplyResult, err error) {
 	root := manager.catalog.Root()
 	snapshot := manager.pager.Snapshot()
 
@@ -268,8 +274,8 @@ func (manager *TableManager) ApplyChangeEvents(changeEvents []TableEvent) (res A
 	return
 }
 
-func (manager *TableManager) Commit(headerData []byte) error {
-	if err := manager.pager.UpdatePage(HEADER_PAGE, headerData); err != nil {
+func (manager *Catalog) Commit(headerData []byte) error {
+	if err := manager.pager.UpdatePage(pager.PagePointer(0), headerData); err != nil {
 		return fmt.Errorf("Commit: couldn't update header page: %w", err)
 	}
 	if err := manager.pager.SaveChanges(); err != nil {
@@ -279,7 +285,7 @@ func (manager *TableManager) Commit(headerData []byte) error {
 	return nil
 }
 
-func (manager *TableManager) saveChanges() error {
+func (manager *Catalog) saveChanges() error {
 	for _, table := range manager.loadedTables {
 		if err := manager.UpdateTable(table); err != nil {
 			return fmt.Errorf("saveChanges: %w", err)
@@ -289,7 +295,7 @@ func (manager *TableManager) saveChanges() error {
 	return nil
 }
 
-func (manager *TableManager) applyCreateTableEvent(event *events.CreateTable) error {
+func (manager *Catalog) applyCreateTableEvent(event *events.CreateTable) error {
 	schema := &TableSchema{}
 	if err := json.Unmarshal(event.Schema, schema); err != nil {
 		return fmt.Errorf("CreateTable Apply: couldn't parse schema: %w", err)
@@ -317,7 +323,7 @@ func (manager *TableManager) applyCreateTableEvent(event *events.CreateTable) er
 	return nil
 }
 
-func (manager *TableManager) applyDropTableEvent(event *events.DropTable) error {
+func (manager *Catalog) applyDropTableEvent(event *events.DropTable) error {
 	table, err := manager.TableByID(TableID(event.TableID))
 	if err != nil {
 		return err
@@ -333,7 +339,7 @@ func (manager *TableManager) applyDropTableEvent(event *events.DropTable) error 
 	return nil
 }
 
-func (manager *TableManager) applyDeleteEntryEvent(event *events.DeleteEntry) error {
+func (manager *Catalog) applyDeleteEntryEvent(event *events.DeleteEntry) error {
 	table, err := manager.TableByID(TableID(event.TableID))
 	if err != nil {
 		return err
@@ -350,7 +356,7 @@ func (manager *TableManager) applyDeleteEntryEvent(event *events.DeleteEntry) er
 	return nil
 }
 
-func (manager *TableManager) applyUpdateEntryEvent(event *events.UpdateEntry) error {
+func (manager *Catalog) applyUpdateEntryEvent(event *events.UpdateEntry) error {
 	table, err := manager.TableByID(TableID(event.TableID))
 	if err != nil {
 		return err
@@ -370,7 +376,7 @@ func (manager *TableManager) applyUpdateEntryEvent(event *events.UpdateEntry) er
 	return nil
 }
 
-func (manager *TableManager) applyInsertEntryEvent(event *events.InsertEntry) error {
+func (manager *Catalog) applyInsertEntryEvent(event *events.InsertEntry) error {
 	table, err := manager.TableByID(TableID(event.TableID))
 	if err != nil {
 		return err
@@ -390,15 +396,15 @@ func (manager *TableManager) applyInsertEntryEvent(event *events.InsertEntry) er
 	return nil
 }
 
-func (manager *TableManager) buildTableQueryByName(name string) *vals.Object {
+func (manager *Catalog) buildTableQueryByName(name string) *vals.Object {
 	return vals.NewObject().Set("name", vals.NewString(name)).Set("state", vals.NewUint32(uint32(TABLE_ACTIVE)))
 }
 
-func (manager *TableManager) buildTableQueryByID(id TableID) *vals.Object {
+func (manager *Catalog) buildTableQueryByID(id TableID) *vals.Object {
 	return vals.NewObject().Set("id", vals.NewUint64(uint64(id)))
 }
 
-func (manager *TableManager) decodeTable(record *vals.Object) (*Table, error) {
+func (manager *Catalog) decodeTable(record *vals.Object) (*Table, error) {
 	id := TableID(record.GetUint64("id"))
 	state := TableState(record.GetUint32("state"))
 	definition := record.GetString("definition")
@@ -418,7 +424,7 @@ func (manager *TableManager) decodeTable(record *vals.Object) (*Table, error) {
 	return table, nil
 }
 
-func (manager *TableManager) encodeTable(table *Table) *vals.Object {
+func (manager *Catalog) encodeTable(table *Table) *vals.Object {
 	stringifiedSchema, _ := json.Marshal(table.schema)
 
 	return vals.NewObject().

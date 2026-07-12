@@ -1,11 +1,11 @@
 package wal
 
 import (
+	"fmt"
+	"iter"
 	"os"
 	"strings"
 	"sync"
-
-	"fmt"
 )
 
 const INITIAL_ENTRY_INDEX EntryIndex = 0
@@ -19,7 +19,6 @@ type WALConfig struct {
 type WAL struct {
 	buffer           [][]byte
 	segment          *Segment
-	syncedEntry      EntryIndex
 	segmentArchiving bool
 
 	directory        string
@@ -41,7 +40,6 @@ func NewWAL(config WALConfig) (*WAL, error) {
 
 	if segment != nil {
 		wal.segment = segment
-		wal.syncedEntry = segment.LastFlushed
 		return wal, nil
 	}
 
@@ -51,14 +49,13 @@ func NewWAL(config WALConfig) (*WAL, error) {
 		return nil, fmt.Errorf("WAL: failed to find archived segment: %w", err)
 	}
 
+	startIndex := INITIAL_ENTRY_INDEX
 	if segment != nil {
-		wal.syncedEntry = segment.LastFlushed
+		startIndex = segment.Last
 		go segment.Close() // Close the archived segment since we won't be using it
-	} else {
-		wal.syncedEntry = INITIAL_ENTRY_INDEX
 	}
 
-	wal.segment, err = NewSegment(wal.syncedEntry, wal.directory, config.SegmentCapacity)
+	wal.segment, err = NewSegment(startIndex, wal.directory, config.SegmentCapacity)
 	if err != nil {
 		return nil, fmt.Errorf("WAL: failed to create new segment: %w", err)
 	}
@@ -77,6 +74,7 @@ func (wal *WAL) Sync() (EntryIndex, error) {
 	if err := wal.segment.Write(wal.buffer); err != nil {
 		return 0, fmt.Errorf("WAL: failed to write buffer to segment: %w", err)
 	}
+	wal.buffer = wal.buffer[:0]
 
 	if wal.segment.IsFull() && !wal.segmentArchiving {
 		wal.segmentArchiving = true
@@ -84,38 +82,85 @@ func (wal *WAL) Sync() (EntryIndex, error) {
 		go wal.archiveSegment()
 	}
 
-	return wal.segment.LastFlushed, nil
+	return wal.segment.Last, nil
+}
+
+func (wal *WAL) Since(entry EntryIndex) iter.Seq2[[]byte, error] {
+	return func(yield func([]byte, error) bool) {
+		wal.mu.Lock()
+		defer wal.mu.Unlock()
+
+		descriptors, err := readSegments(wal.directory)
+		if err != nil {
+			yield(nil, fmt.Errorf("WAL: failed to read all active segments: %w", err))
+			return
+		}
+
+		if !contains(descriptors, entry) {
+			archivedDescriptors, err := readSegments(wal.archiveDirectory)
+			if err != nil {
+				yield(nil, fmt.Errorf("WAL: failed to read all archive segments: %w", err))
+				return
+			}
+			descriptors = append(archivedDescriptors, descriptors...)
+		}
+
+		if !contains(descriptors, entry) {
+			yield(nil, fmt.Errorf("WAL: records started from index %d are missed", entry))
+			return
+		}
+
+		for _, descriptor := range descriptors {
+			seg, err := OpenSegment(descriptor.path(), descriptor.start, wal.segment.Capacity)
+
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+
+			for entry, err := range seg.Since(entry) {
+				if err != nil {
+					seg.Close()
+					yield(nil, err)
+					return
+				}
+				if !yield(entry.record, nil) {
+					seg.Close()
+					return
+				}
+			}
+			seg.Close()
+		}
+	}
 }
 
 func (wal *WAL) Empty() bool {
 	wal.mu.Lock()
 	defer wal.mu.Unlock()
 
-	return wal.segment.LastFlushed == INITIAL_ENTRY_INDEX
+	return wal.segment.Last == INITIAL_ENTRY_INDEX
 }
 
 func (wal *WAL) latestSegment(directory string) (*Segment, error) {
-	entries, err := os.ReadDir(directory)
+	descriptors, err := readSegments(directory)
 	if err != nil {
-		return nil, fmt.Errorf("WAL: failed to read %q directory: %w", directory, err)
+		return nil, fmt.Errorf("WAL: failed to read latest segment in %q directory: %w", directory, err)
 	}
 
-	for idx := len(entries) - 1; idx >= 0; idx-- {
-		entry := entries[idx]
-
-		if index, err := parseSegmentName(entry.Name()); err == nil {
-			return NewSegment(index, directory, wal.segment.Capacity)
-		}
+	if len(descriptors) == 0 {
+		return nil, nil
 	}
 
-	return nil, nil
+	latest := descriptors[len(descriptors)-1]
+
+	return NewSegment(latest.start, latest.directory, wal.segment.Capacity)
 }
 
 func (wal *WAL) archiveSegment() {
 	wal.mu.Lock()
 
 	archivedSegment := wal.segment
-	segment, err := NewSegment(wal.segment.LastFlushed, wal.directory, wal.segment.Capacity)
+	segment, err := NewSegment(wal.segment.Last, wal.directory, wal.segment.Capacity)
 
 	if err != nil {
 		fmt.Printf("WAL: failed to create new segment during archive: %v\n", err)
