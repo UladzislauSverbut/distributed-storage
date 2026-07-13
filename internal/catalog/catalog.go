@@ -23,8 +23,8 @@ type SchemaChanges struct {
 
 type PageChanges struct {
 	PagesCount    pager.PagesCount
-	ReusablePages pager.PageList
-	RetiredPages  pager.PageList
+	ReusablePages []pager.PagePointer
+	RetiredPages  []pager.PagePointer
 }
 
 type ApplyResult struct {
@@ -259,8 +259,7 @@ func (manager *Catalog) ApplyChangeEvents(changeEvents []events.Event) (res Appl
 			}
 
 		case *events.StartTransaction,
-			*events.CommitTransaction,
-			*events.FreePages:
+			*events.CommitTransaction:
 			// These events are not related to table schema or entries, so we can ignore them during replay
 
 		default:

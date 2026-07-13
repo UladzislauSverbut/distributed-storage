@@ -2,7 +2,6 @@ package codec
 
 import (
 	"distributed-storage/internal/events"
-	"distributed-storage/internal/pager"
 	"encoding/binary"
 	"fmt"
 )
@@ -29,8 +28,6 @@ func EncodeEvent(event events.Event) []byte {
 		encodedEvent = encodeDeleteEntry(event)
 	case *events.UpdateDBVersion:
 		encodedEvent = encodeUpdateDBVersion(event)
-	case *events.FreePages:
-		encodedEvent = encodeFreePages(event)
 	default:
 		panic("EncodeEvent: unknown event type")
 	}
@@ -65,8 +62,6 @@ func DecodeEvent(data []byte) (event events.Event, err error) {
 		event = decodeDeleteEntry(encodedEvent)
 	case events.UPDATE_DB_VERSION_EVENT:
 		event = decodeUpdateDBVersion(encodedEvent)
-	case events.FREE_PAGES_EVENT:
-		event = decodeFreePages(encodedEvent)
 	default:
 		panic("DecodeEvent: unknown event type")
 	}
@@ -255,35 +250,3 @@ func decodeUpdateDBVersion(data []byte) *events.UpdateDBVersion {
 	return events.NewUpdateDBVersion(dbVersion)
 }
 
-func encodeFreePages(event *events.FreePages) []byte {
-	var out []byte
-
-	version := make([]byte, 8)
-	pages := make([]byte, len(event.List.Pages())*16)
-
-	for idx, interval := range event.List.Pages() {
-		binary.LittleEndian.PutUint64(pages[idx*16:], interval.Start)
-		binary.LittleEndian.PutUint64(pages[idx*16+8:], interval.End)
-	}
-
-	binary.LittleEndian.PutUint64(version, event.Version)
-	out = append(out, version...)
-
-	return append(out, pages...)
-}
-
-func decodeFreePages(data []byte) *events.FreePages {
-	offset := 0
-	version := binary.LittleEndian.Uint64(data[offset : offset+8])
-	serializedPages := data[offset+8:]
-
-	pages := make([]pager.PageInterval, len(serializedPages)/16)
-
-	for idx := range pages {
-		pages[idx] = pager.PageInterval{
-			Start: binary.LittleEndian.Uint64(serializedPages[idx*16:]),
-			End:   binary.LittleEndian.Uint64(serializedPages[idx*16+8:]),
-		}
-	}
-	return events.NewFreePages(version, pager.NewPageList(pages...))
-}

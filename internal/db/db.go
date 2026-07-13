@@ -18,23 +18,27 @@ import (
 	"time"
 )
 
-const DB_STORAGE_SIGNATURE = "DISTRIBUTED_DB_STORAGE" // Signature to identify and validate database storage file
+const DB_STORAGE_SIGNATURE = "DISTRIBUTED_DB_STORAGE"
 const INITIAL_DB_VERSION catalog.DatabaseVersion = 1
 
-// Bytes
-const NUMBER_OF_PARALLEL_TRANSACTIONS = 1024 // Max number of parallel transactions
-const COMMIT_BATCH_SIZE = 256                // Number of transactions to commit in a single batch
+const NUMBER_OF_PARALLEL_TRANSACTIONS = 1024
+const COMMIT_BATCH_SIZE = 256
 
 const TRANSACTION_TIMEOUT = 30 * time.Minute
 const COMMIT_INTERVAL = 1 * time.Millisecond
 const SYNC_INTERVAL = 100 * time.Millisecond
 
 type DatabaseHeader struct {
-	root         pager.PagePointer
-	version      catalog.DatabaseVersion
+	root    pager.PagePointer
+	version catalog.DatabaseVersion
+
 	allocatedIds uint64
 	pagesCount   uint64
-	walIndex     wal.EntryIndex
+
+	walIndex wal.EntryIndex
+
+	freeListHead pager.PagePointer
+	freeListTail pager.PagePointer
 }
 
 type IDAllocator func() uint64
@@ -44,12 +48,11 @@ type Database struct {
 	syncedVersion catalog.DatabaseVersion
 	idAllocator   atomic.Uint64
 
-	wal     *WAL
+	wal     *wal.WAL
 	pager   *pager.Pager
 	config  DatabaseConfig
 	storage store.Storage
 
-	pagePool  *helpers.MinMap[catalog.DatabaseVersion, pager.PageList]
 	txManager *transaction.TransactionManager
 
 	mu sync.RWMutex
@@ -68,9 +71,7 @@ func NewDatabase(config DatabaseConfig) (*Database, error) {
 	config = applyDefaults(config)
 
 	db := &Database{
-		config: config,
-
-		pagePool:  helpers.NewMinMap[catalog.DatabaseVersion, pager.PageList](func(i, j catalog.DatabaseVersion) bool { return i < j }),
+		config:    config,
 		txManager: transaction.NewTransactionManager(NUMBER_OF_PARALLEL_TRANSACTIONS),
 	}
 
@@ -90,7 +91,7 @@ func NewDatabase(config DatabaseConfig) (*Database, error) {
 
 	db.pager = pager.NewPager(db.storage, db.header.pagesCount, db.config.PageSize)
 
-	if db.wal, err = newWAL(wal.WALConfig{
+	if db.wal, err = wal.NewWAL(wal.WALConfig{
 		Directory:        db.config.WALDirectory,
 		ArchiveDirectory: db.config.WALArchiveDirectory,
 		SegmentCapacity:  db.config.WALSegmentSize,
@@ -109,7 +110,11 @@ func NewDatabase(config DatabaseConfig) (*Database, error) {
 }
 
 func (db *Database) Begin(ctx context.Context) *transaction.Transaction {
-	return db.txManager.Begin(db.catalog(), ctx)
+	db.mu.RLock()
+	pg := db.pager.Fork(db.header.pagesCount)
+	cat := db.catalog(pg)
+	db.mu.RUnlock()
+	return db.txManager.Begin(cat, ctx)
 }
 
 func (db *Database) Run(request func(*transaction.Transaction) error) error {
@@ -158,7 +163,6 @@ func (db *Database) runSyncLoop() {
 
 	for range ticker.C {
 		db.mu.Lock()
-
 		ticker.Stop()
 
 		if err := db.storage.Flush(); err != nil {
@@ -168,87 +172,106 @@ func (db *Database) runSyncLoop() {
 		}
 
 		db.mu.Unlock()
-
 		ticker.Reset(SYNC_INTERVAL)
 	}
 }
 
 func (db *Database) commitBatch(transactions []transaction.TransactionCommit) {
-	latestUnreachableVersion := db.txManager.LatestUnreachableVersion(db.syncedVersion)
-	manager := db.catalog(db.collectReleasedPages(latestUnreachableVersion))
+	db.mu.RLock()
+	syncedVersion := db.syncedVersion
+	db.mu.RUnlock()
 
-	var abortedTransactions []transaction.TransactionCommit
-	var approvedTransactions []transaction.TransactionCommit
-
-	var (
-		applyResult catalog.ApplyResult
-		err         error
-	)
-	for _, transaction := range transactions {
-		if applyResult, err = manager.ApplyChangeEvents(transaction.ChangeEvents); err != nil {
-			abortedTransactions = append(abortedTransactions, transaction)
-		} else {
-			approvedTransactions = append(approvedTransactions, transaction)
-		}
+	latestUnreachableVersion := db.txManager.LatestUnreachableVersion(syncedVersion)
+	fl, pg, manager, err := db.setupCommit(uint64(latestUnreachableVersion))
+	if err != nil {
+		db.txManager.Reject(transactions, fmt.Errorf("Database: failed to setup commit: %w", err))
+		return
 	}
 
-	retiredPages := applyResult.PageChanges.RetiredPages
-	reusablePages := applyResult.PageChanges.ReusablePages
-	pagesCount := applyResult.PageChanges.PagesCount
+	approved, aborted, applyResult := db.applyTransactions(manager, transactions)
 
 	newHeader := &DatabaseHeader{
 		root:         applyResult.Root,
 		version:      db.header.version + 1,
 		allocatedIds: db.idAllocator.Load(),
-		pagesCount:   pagesCount,
 	}
 
-	if err := manager.Commit(db.serializeHeader(newHeader)); err != nil {
-		db.txManager.Reject(transactions, fmt.Errorf("Database: failed to commit changes: %w", err))
-		return
+	for _, commit := range approved {
+		db.wal.Append(EncodeEvent(events.NewStartTransaction()))
+		for _, event := range commit.ChangeEvents {
+			db.wal.Append(EncodeEvent(event))
+		}
+		db.wal.Append(EncodeEvent(events.NewCommitTransaction()))
 	}
+	db.wal.Append(EncodeEvent(events.NewUpdateDBVersion(uint64(newHeader.version))))
 
-	db.wal.appendTransactions(approvedTransactions)
-	db.wal.appendVersionUpdate(db.header.version + 1)
-
-	db.wal.appendFreePages(latestUnreachableVersion, reusablePages) // These pages can be reused because they are not used by any active transaction (e.g. they were allocated and released in the same version)
-	db.wal.appendFreePages(db.header.version, retiredPages)         // These pages will be ready to safely reused only since next db version because they can be still used by active transactions in the current version
-
-	walIndex, err := db.wal.sync()
+	walIndex, err := db.wal.Sync()
 	if err != nil {
 		db.txManager.Reject(transactions, fmt.Errorf("Database: WAL flush failed: %w", err))
 		return
 	}
 	newHeader.walIndex = walIndex
 
-	db.txManager.Approve(approvedTransactions)
-	db.txManager.Reject(abortedTransactions, errors.New("Database: transaction aborted due to conflicts with other transactions"))
+	if err = db.persistCommit(fl, pg, manager, applyResult, newHeader, uint64(latestUnreachableVersion), uint64(db.header.version)); err != nil {
+		db.txManager.Reject(transactions, fmt.Errorf("Database: failed to persist commit: %w", err))
+		return
+	}
 
-	db.releasePages(latestUnreachableVersion, reusablePages)
-	db.releasePages(db.header.version, retiredPages)
+	db.txManager.Approve(approved)
+	db.txManager.Reject(aborted, errors.New("Database: transaction aborted due to conflicts with other transactions"))
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	db.header = newHeader
 }
 
-func (db *Database) collectReleasedPages(target catalog.DatabaseVersion) pager.PageList {
-	pageList := pager.NewPageList()
+func (db *Database) setupCommit(maxVersion uint64) (*freeList, *pager.Pager, *catalog.Catalog, error) {
+	db.mu.RLock()
+	pg := db.pager.Fork(db.header.pagesCount)
+	db.mu.RUnlock()
 
-	for {
-		if version, _, ok := db.pagePool.PeekMin(); ok && version <= target {
-			_, freedLists, _ := db.pagePool.PopMin()
-			for _, list := range freedLists {
-				pageList.AddMany(list.Pages())
-			}
-		} else {
-			return pageList
-		}
+	fl := newFreeList(db.header.freeListHead, db.header.freeListTail, pg)
+	reusable, err := fl.collect(maxVersion)
+	if err != nil {
+		return nil, nil, nil, err
 	}
+
+	db.mu.RLock()
+	pg = db.pager.Fork(db.header.pagesCount, reusable)
+	manager := db.catalog(pg)
+	db.mu.RUnlock()
+
+	fl.pager = pg
+	return fl, pg, manager, nil
 }
 
-func (db *Database) releasePages(version catalog.DatabaseVersion, list pager.PageList) {
-	db.pagePool.Add(version, list)
+func (db *Database) applyTransactions(manager *catalog.Catalog, transactions []transaction.TransactionCommit) (
+	approved, aborted []transaction.TransactionCommit, last catalog.ApplyResult,
+) {
+	var err error
+	for _, tx := range transactions {
+		if last, err = manager.ApplyChangeEvents(tx.ChangeEvents); err != nil {
+			aborted = append(aborted, tx)
+		} else {
+			approved = append(approved, tx)
+		}
+	}
+	return
+}
+
+func (db *Database) persistCommit(fl *freeList, pg *pager.Pager, manager *catalog.Catalog, result catalog.ApplyResult, header *DatabaseHeader, reusableVersion, retiredVersion uint64) error {
+	if err := fl.push(reusableVersion, result.PageChanges.ReusablePages); err != nil {
+		return fmt.Errorf("push reusable pages: %w", err)
+	}
+	if err := fl.push(retiredVersion, result.PageChanges.RetiredPages); err != nil {
+		return fmt.Errorf("push retired pages: %w", err)
+	}
+
+	header.freeListHead = fl.head
+	header.freeListTail = fl.tail
+	header.pagesCount = pg.PagesCount()
+
+	return manager.Commit(db.serializeHeader(header))
 }
 
 func (db *Database) readHeader() (*DatabaseHeader, error) {
@@ -258,8 +281,8 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 	header := &DatabaseHeader{
 		root:         pager.NULL_PAGE,
 		version:      INITIAL_DB_VERSION,
-		pagesCount:   1, // Reserve 1 page for header
-		allocatedIds: 1, // Reserve 0 table for @catalog table
+		pagesCount:   1,
+		allocatedIds: 1,
 	}
 
 	if helpers.IsZero(signature) {
@@ -277,12 +300,14 @@ func (db *Database) readHeader() (*DatabaseHeader, error) {
 	header.pagesCount = binary.LittleEndian.Uint64(headerBlock[signatureSize+16 : signatureSize+24])
 	header.allocatedIds = binary.LittleEndian.Uint64(headerBlock[signatureSize+24 : signatureSize+32])
 	header.walIndex = wal.EntryIndex(binary.LittleEndian.Uint64(headerBlock[signatureSize+32 : signatureSize+40]))
+	header.freeListHead = pager.PagePointer(binary.LittleEndian.Uint64(headerBlock[signatureSize+40 : signatureSize+48]))
+	header.freeListTail = pager.PagePointer(binary.LittleEndian.Uint64(headerBlock[signatureSize+48 : signatureSize+56]))
 
 	return header, nil
 }
 
 func (db *Database) serializeHeader(header *DatabaseHeader) []byte {
-	headerBlock := make([]byte, len(DB_STORAGE_SIGNATURE)+40)
+	headerBlock := make([]byte, len(DB_STORAGE_SIGNATURE)+56)
 	signatureSize := len(DB_STORAGE_SIGNATURE)
 
 	copy(headerBlock[0:signatureSize], []byte(DB_STORAGE_SIGNATURE))
@@ -291,6 +316,8 @@ func (db *Database) serializeHeader(header *DatabaseHeader) []byte {
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize+16:signatureSize+24], uint64(header.pagesCount))
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize+24:signatureSize+32], uint64(header.allocatedIds))
 	binary.LittleEndian.PutUint64(headerBlock[signatureSize+32:signatureSize+40], uint64(header.walIndex))
+	binary.LittleEndian.PutUint64(headerBlock[signatureSize+40:signatureSize+48], uint64(header.freeListHead))
+	binary.LittleEndian.PutUint64(headerBlock[signatureSize+48:signatureSize+56], uint64(header.freeListTail))
 
 	return headerBlock
 }
@@ -298,15 +325,14 @@ func (db *Database) serializeHeader(header *DatabaseHeader) []byte {
 func (db *Database) init() error {
 	if db.empty() {
 		return db.initWAL()
-	} else {
-		return db.recoverFromWAL()
 	}
+	return db.recoverFromWAL()
 }
 
 func (db *Database) initWAL() error {
-	db.wal.appendVersionUpdate(db.header.version)
+	db.wal.Append(EncodeEvent(events.NewUpdateDBVersion(uint64(db.header.version))))
 
-	walIndex, err := db.wal.sync()
+	walIndex, err := db.wal.Sync()
 	if err != nil {
 		return fmt.Errorf("Database: failed to flush WAL after setup: %w", err)
 	}
@@ -319,23 +345,34 @@ func (db *Database) initWAL() error {
 }
 
 func (db *Database) recoverFromWAL() error {
-	restoredEvents, walIndex, err := db.wal.eventsSince(db.header.version)
-	if err != nil {
-		return fmt.Errorf("Database: failed to get latest database version from WAL: %w", err)
+	var allEvents []events.Event
+	for record, err := range db.wal.Since(wal.INITIAL_ENTRY_INDEX) {
+		if err != nil {
+			return fmt.Errorf("Database: failed to read WAL record: %w", err)
+		}
+		event, err := DecodeEvent(record)
+		if err != nil {
+			return fmt.Errorf("Database: failed to decode WAL event: %w", err)
+		}
+		allEvents = append(allEvents, event)
 	}
 
-	freePages := pager.NewPageList()
-
-	// FreePages events stored in WAL at the beginning of the events list because they are written to WAL UpdateDBVersion event
-	for _, event := range restoredEvents {
-		if event, ok := event.(*events.FreePages); ok {
-			freePages.AddMany(event.List.Pages())
-		} else {
-			break
+	lastIdx := -1
+	for i, event := range allEvents {
+		if v, ok := event.(*events.UpdateDBVersion); ok && catalog.DatabaseVersion(v.Version) == db.header.version {
+			lastIdx = i
 		}
 	}
+	if lastIdx < 0 {
+		return nil
+	}
+	restoredEvents := allEvents[lastIdx+1:]
+	walIndex := db.wal.Last()
 
-	manager := db.catalog(freePages)
+	fl, pg, manager, err := db.setupCommit(uint64(db.header.version))
+	if err != nil {
+		return fmt.Errorf("Database: failed to setup WAL recovery: %w", err)
+	}
 
 	applyResult, err := manager.ApplyChangeEvents(restoredEvents)
 	if err != nil {
@@ -344,14 +381,13 @@ func (db *Database) recoverFromWAL() error {
 
 	db.header.root = applyResult.Root
 	db.header.version = applyResult.DatabaseVersion
-	db.header.pagesCount = applyResult.PageChanges.PagesCount
 
 	if len(applyResult.SchemaChanges.CreatedTables) > 0 {
 		db.header.allocatedIds = uint64(slices.Max(applyResult.SchemaChanges.CreatedTables)) + 1
 	}
 
-	if err := manager.Commit(db.serializeHeader(db.header)); err != nil {
-		return fmt.Errorf("Database: failed to commit restored state: %w", err)
+	if err = db.persistCommit(fl, pg, manager, applyResult, db.header, 0, 0); err != nil {
+		return fmt.Errorf("Database: failed to persist restored state: %w", err)
 	}
 
 	if err := db.storage.Flush(); err != nil {
@@ -365,19 +401,16 @@ func (db *Database) recoverFromWAL() error {
 	return nil
 }
 
-func (db *Database) catalog(freePages ...pager.PageList) *catalog.Catalog {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
+func (db *Database) catalog(pg *pager.Pager) *catalog.Catalog {
 	state := catalog.CatalogState{Root: db.header.root, Version: db.header.version}
 
 	return catalog.NewCatalog(
 		state,
 		func() uint64 { return db.idAllocator.Add(1) - 1 },
-		db.pager.Fork(db.header.pagesCount, freePages...),
+		pg,
 	)
 }
 
 func (db *Database) empty() bool {
-	return db.header.version == INITIAL_DB_VERSION && db.wal.empty()
+	return db.header.version == INITIAL_DB_VERSION && db.wal.Empty()
 }

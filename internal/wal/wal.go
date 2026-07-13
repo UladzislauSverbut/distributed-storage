@@ -21,19 +21,14 @@ type WAL struct {
 	segment          *Segment
 	segmentArchiving bool
 
-	directory        string
-	archiveDirectory string
-
-	mu sync.Mutex
+	config WALConfig
+	mu     sync.Mutex
 }
 
 func NewWAL(config WALConfig) (*WAL, error) {
-	wal := &WAL{
-		directory:        config.Directory,
-		archiveDirectory: config.ArchiveDirectory,
-	}
+	wal := &WAL{config: config}
 
-	segment, err := wal.latestSegment(wal.directory) // We will reuse the latest active segment if it exists
+	segment, err := wal.latestSegment(config.Directory)
 	if err != nil {
 		return nil, fmt.Errorf("WAL: failed to find active segment: %w", err)
 	}
@@ -43,8 +38,7 @@ func NewWAL(config WALConfig) (*WAL, error) {
 		return wal, nil
 	}
 
-	// If there is no existing active segment, check for the latest archived
-	segment, err = wal.latestSegment(wal.archiveDirectory)
+	segment, err = wal.latestSegment(config.ArchiveDirectory)
 	if err != nil {
 		return nil, fmt.Errorf("WAL: failed to find archived segment: %w", err)
 	}
@@ -52,10 +46,10 @@ func NewWAL(config WALConfig) (*WAL, error) {
 	startIndex := INITIAL_ENTRY_INDEX
 	if segment != nil {
 		startIndex = segment.Last
-		go segment.Close() // Close the archived segment since we won't be using it
+		go segment.Close()
 	}
 
-	wal.segment, err = NewSegment(startIndex, wal.directory, config.SegmentCapacity)
+	wal.segment, err = NewSegment(startIndex, config.Directory, config.SegmentCapacity)
 	if err != nil {
 		return nil, fmt.Errorf("WAL: failed to create new segment: %w", err)
 	}
@@ -78,7 +72,6 @@ func (wal *WAL) Sync() (EntryIndex, error) {
 
 	if wal.segment.IsFull() && !wal.segmentArchiving {
 		wal.segmentArchiving = true
-
 		go wal.archiveSegment()
 	}
 
@@ -90,14 +83,14 @@ func (wal *WAL) Since(entry EntryIndex) iter.Seq2[[]byte, error] {
 		wal.mu.Lock()
 		defer wal.mu.Unlock()
 
-		descriptors, err := readSegments(wal.directory)
+		descriptors, err := readSegments(wal.config.Directory)
 		if err != nil {
 			yield(nil, fmt.Errorf("WAL: failed to read all active segments: %w", err))
 			return
 		}
 
 		if !contains(descriptors, entry) {
-			archivedDescriptors, err := readSegments(wal.archiveDirectory)
+			archivedDescriptors, err := readSegments(wal.config.ArchiveDirectory)
 			if err != nil {
 				yield(nil, fmt.Errorf("WAL: failed to read all archive segments: %w", err))
 				return
@@ -111,13 +104,11 @@ func (wal *WAL) Since(entry EntryIndex) iter.Seq2[[]byte, error] {
 		}
 
 		for _, descriptor := range descriptors {
-			seg, err := OpenSegment(descriptor.path(), descriptor.start, wal.segment.Capacity)
-
+			seg, err := OpenSegment(descriptor.path(), descriptor.start, wal.config.SegmentCapacity)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
-
 			for entry, err := range seg.Since(entry) {
 				if err != nil {
 					seg.Close()
@@ -141,6 +132,13 @@ func (wal *WAL) Empty() bool {
 	return wal.segment.Last == INITIAL_ENTRY_INDEX
 }
 
+func (wal *WAL) Last() EntryIndex {
+	wal.mu.Lock()
+	defer wal.mu.Unlock()
+
+	return wal.segment.Last
+}
+
 func (wal *WAL) latestSegment(directory string) (*Segment, error) {
 	descriptors, err := readSegments(directory)
 	if err != nil {
@@ -153,14 +151,14 @@ func (wal *WAL) latestSegment(directory string) (*Segment, error) {
 
 	latest := descriptors[len(descriptors)-1]
 
-	return NewSegment(latest.start, latest.directory, wal.segment.Capacity)
+	return NewSegment(latest.start, latest.directory, wal.config.SegmentCapacity)
 }
 
 func (wal *WAL) archiveSegment() {
 	wal.mu.Lock()
 
 	archivedSegment := wal.segment
-	segment, err := NewSegment(wal.segment.Last, wal.directory, wal.segment.Capacity)
+	segment, err := NewSegment(wal.segment.Last, wal.config.Directory, wal.config.SegmentCapacity)
 
 	if err != nil {
 		fmt.Printf("WAL: failed to create new segment during archive: %v\n", err)
@@ -173,10 +171,10 @@ func (wal *WAL) archiveSegment() {
 	wal.segmentArchiving = false
 	wal.mu.Unlock()
 
-	oldArchivedSegmentPath := archivedSegment.File.Name()
-	newArchivedSegmentPath := strings.Replace(oldArchivedSegmentPath, wal.directory, wal.archiveDirectory, 1)
+	oldPath := archivedSegment.File.Name()
+	newPath := strings.Replace(oldPath, wal.config.Directory, wal.config.ArchiveDirectory, 1)
 
-	if err := os.Rename(oldArchivedSegmentPath, newArchivedSegmentPath); err != nil {
+	if err := os.Rename(oldPath, newPath); err != nil {
 		fmt.Printf("WAL: failed to move archived segment to archive directory: %v\n", err)
 	}
 

@@ -19,6 +19,15 @@ func pageData(b string) []byte {
 	return d
 }
 
+func containsPage(pages []PagePointer, p PagePointer) bool {
+	for _, v := range pages {
+		if v == p {
+			return true
+		}
+	}
+	return false
+}
+
 // --- NewPager ---
 
 func TestNewPager_InitialState(t *testing.T) {
@@ -26,23 +35,22 @@ func TestNewPager_InitialState(t *testing.T) {
 	if p.PagesCount() != 1 {
 		t.Errorf("expected PagesCount 1, got %d", p.PagesCount())
 	}
-	if !p.ReusablePages().Empty() {
+	if len(p.ReusablePages()) != 0 {
 		t.Error("expected empty ReusablePages on fresh pager")
 	}
-	if !p.RetiredPages().Empty() {
+	if len(p.RetiredPages()) != 0 {
 		t.Error("expected empty RetiredPages on fresh pager")
 	}
 }
 
 func TestNewPager_WithAvailablePages(t *testing.T) {
-	avail := NewPageList(PageInterval{Start: 3, End: 5})
+	avail := []PagePointer{3, 4, 5}
 	p := NewPager(makeStorage(), 10, testPageSize, avail)
 
-	// Both AvailablePages and ReusablePages are seeded with the provided list.
 	// The first CreatePage should pop from ReusablePages.
 	ptr := p.CreatePage(pageData("first page"))
-	if ptr != 3 {
-		t.Errorf("expected page 3 from reusable pool, got %d", ptr)
+	if ptr != 5 {
+		t.Errorf("expected page 5 from reusable pool (last element), got %d", ptr)
 	}
 }
 
@@ -189,7 +197,7 @@ func TestPager_FreePage_OwnedPageMovesToReusable(t *testing.T) {
 
 	p.FreePage(ptr)
 
-	if !p.ReusablePages().Has(ptr) {
+	if !containsPage(p.ReusablePages(), ptr) {
 		t.Errorf("expected freed owned page %d in ReusablePages", ptr)
 	}
 }
@@ -201,10 +209,10 @@ func TestPager_FreePage_NonOwnedPageMovesToRetired(t *testing.T) {
 
 	p.FreePage(0) // page 0 is not in OwnedPages
 
-	if !p.RetiredPages().Has(0) {
+	if !containsPage(p.RetiredPages(), 0) {
 		t.Error("expected non-owned page 0 in RetiredPages after FreePage")
 	}
-	if p.ReusablePages().Has(0) {
+	if containsPage(p.ReusablePages(), 0) {
 		t.Error("expected page 0 NOT in ReusablePages")
 	}
 }
@@ -227,14 +235,14 @@ func TestPager_FreePage_RemovesFromPageUpdates(t *testing.T) {
 
 func TestPager_RetiredPages_EmptyInitially(t *testing.T) {
 	p := NewPager(makeStorage(), 1, testPageSize)
-	if !p.RetiredPages().Empty() {
+	if len(p.RetiredPages()) != 0 {
 		t.Error("expected empty RetiredPages on fresh pager")
 	}
 }
 
 func TestPager_ReusablePages_EmptyInitially(t *testing.T) {
 	p := NewPager(makeStorage(), 1, testPageSize)
-	if !p.ReusablePages().Empty() {
+	if len(p.ReusablePages()) != 0 {
 		t.Error("expected empty ReusablePages on fresh pager")
 	}
 }
@@ -323,7 +331,7 @@ func TestPager_Restore_ResetsOwnedAndFree(t *testing.T) {
 
 	p.Restore(snap)
 
-	if p.ReusablePages().Has(ptr) {
+	if containsPage(p.ReusablePages(), ptr) {
 		t.Errorf("expected ReusablePages to not contain page %d after restore", ptr)
 	}
 }
@@ -345,11 +353,12 @@ func TestPager_Snapshot_IsIndependentOfOriginal(t *testing.T) {
 func TestPager_Snapshot_OwnedPagesIsIndependent(t *testing.T) {
 	p := NewPager(makeStorage(), 1, testPageSize)
 	snap := p.Snapshot()
+	countBefore := snap.PagesCount
 
-	ptr := p.CreatePage(pageData("first page"))
-	_ = ptr
+	p.CreatePage(pageData("first page"))
 
-	if snap.OwnedPages.Has(ptr) {
-		t.Errorf("snapshot OwnedPages was mutated to include page %d", ptr)
+	// Snapshot's PagesCount must not grow when the original allocates more pages.
+	if snap.PagesCount != countBefore {
+		t.Errorf("snapshot was mutated: PagesCount grew from %d to %d", countBefore, snap.PagesCount)
 	}
 }

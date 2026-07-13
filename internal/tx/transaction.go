@@ -124,26 +124,22 @@ func (tx *Transaction) IsActive() bool {
 }
 
 func (tx *Transaction) setCommitting() bool {
-
-	if TransactionState(tx.state.Load()) != TRANSACTION_PROCESSING {
-		return false
-	}
-
 	return tx.state.CompareAndSwap(int32(TRANSACTION_PROCESSING), int32(TRANSACTION_COMMITTING))
 }
 
 func (tx *Transaction) setCommitted() bool {
-	if TransactionState(tx.state.Load()) != TRANSACTION_COMMITTING {
-		return false
-	}
-
 	return tx.state.CompareAndSwap(int32(TRANSACTION_COMMITTING), int32(TRANSACTION_COMMITTED))
 }
 
 func (tx *Transaction) setAborted() bool {
-	if state := TransactionState(tx.state.Load()); state != TRANSACTION_COMMITTING {
-		return false
-	}
+	for {
+		state := TransactionState(tx.state.Load())
+		if state != TRANSACTION_PROCESSING && state != TRANSACTION_COMMITTING {
+			return false
+		}
 
-	return tx.state.CompareAndSwap(int32(TRANSACTION_COMMITTING), int32(TRANSACTION_ABORTED))
+		if tx.state.CompareAndSwap(int32(state), int32(TRANSACTION_ABORTED)) {
+			return true
+		}
+	}
 }
