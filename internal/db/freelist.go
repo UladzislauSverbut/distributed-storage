@@ -27,10 +27,6 @@ func newFreeList(head, tail pager.PagePointer, pg *pager.Pager) *freeList {
 	return &freeList{head: head, tail: tail, pager: pg}
 }
 
-func (list *freeList) nodeCapacity() int {
-	return (list.pager.PageSize() - HEADER_SIZE) / 16
-}
-
 func (list *freeList) push(version uint64, pages []pager.PagePointer) error {
 	if len(pages) == 0 {
 		return nil
@@ -41,6 +37,49 @@ func (list *freeList) push(version uint64, pages []pager.PagePointer) error {
 	}
 
 	return list.appendToTail(version, pages)
+}
+
+func (list *freeList) collect(version uint64) ([]pager.PagePointer, error) {
+	var result []pager.PagePointer
+
+	for list.head != pager.NULL_PAGE {
+		data := list.pager.Page(list.head)
+		next := pager.PagePointer(binary.LittleEndian.Uint64(data[:8]))
+		readPos := int(binary.LittleEndian.Uint32(data[8:12]))
+		count := int(binary.LittleEndian.Uint32(data[12:16]))
+
+		newReadPos := readPos
+		for newReadPos < count {
+			offset := HEADER_SIZE + newReadPos*16
+			if binary.LittleEndian.Uint64(data[offset:]) > maxVersion {
+				break
+			}
+			result = append(result, pager.PagePointer(binary.LittleEndian.Uint64(data[offset+8:])))
+			newReadPos++
+		}
+
+		if newReadPos == count {
+			// Node fully consumed: reclaim the node page itself and advance head
+			result = append(result, list.head)
+			list.head = next
+			if list.head == pager.NULL_PAGE {
+				list.tail = pager.NULL_PAGE
+			}
+		} else {
+			// Partially consumed: persist the new read position and stop
+			if newReadPos > readPos {
+				updated := make([]byte, list.pager.PageSize())
+				copy(updated, data)
+				binary.LittleEndian.PutUint32(updated[8:12], uint32(newReadPos))
+				if err := list.pager.UpdatePage(list.head, updated); err != nil {
+					return nil, err
+				}
+			}
+			break
+		}
+	}
+
+	return result, nil
 }
 
 func (list *freeList) isEarlierVersion(node pager.PagePointer, version uint64) bool {
@@ -134,47 +173,8 @@ func (list *freeList) appendToTail(version uint64, pages []pager.PagePointer) er
 	return nil
 }
 
-func (list *freeList) collect(maxVersion uint64) ([]pager.PagePointer, error) {
-	var result []pager.PagePointer
-
-	for list.head != pager.NULL_PAGE {
-		data := list.pager.Page(list.head)
-		next := pager.PagePointer(binary.LittleEndian.Uint64(data[:8]))
-		readPos := int(binary.LittleEndian.Uint32(data[8:12]))
-		count := int(binary.LittleEndian.Uint32(data[12:16]))
-
-		newReadPos := readPos
-		for newReadPos < count {
-			offset := HEADER_SIZE + newReadPos*16
-			if binary.LittleEndian.Uint64(data[offset:]) > maxVersion {
-				break
-			}
-			result = append(result, pager.PagePointer(binary.LittleEndian.Uint64(data[offset+8:])))
-			newReadPos++
-		}
-
-		if newReadPos == count {
-			// Node fully consumed: reclaim the node page itself and advance head
-			result = append(result, list.head)
-			list.head = next
-			if list.head == pager.NULL_PAGE {
-				list.tail = pager.NULL_PAGE
-			}
-		} else {
-			// Partially consumed: persist the new read position and stop
-			if newReadPos > readPos {
-				updated := make([]byte, list.pager.PageSize())
-				copy(updated, data)
-				binary.LittleEndian.PutUint32(updated[8:12], uint32(newReadPos))
-				if err := list.pager.UpdatePage(list.head, updated); err != nil {
-					return nil, err
-				}
-			}
-			break
-		}
-	}
-
-	return result, nil
+func (list *freeList) nodeCapacity() int {
+	return (list.pager.PageSize() - HEADER_SIZE) / 16
 }
 
 func wrapToFreeList(pg *pager.Pager, version uint64, pages []pager.PagePointer) *freeList {
