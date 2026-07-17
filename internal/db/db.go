@@ -177,48 +177,56 @@ func (db *Database) runSyncLoop() {
 }
 
 func (db *Database) commitBatch(transactions []transaction.TransactionCommit) {
-	db.mu.RLock()
-	syncedVersion := db.syncedVersion
-	db.mu.RUnlock()
 
-	latestUnreachableVersion := db.txManager.LatestUnreachableVersion(syncedVersion)
-	fl, pg, manager, err := db.setupCommit(uint64(latestUnreachableVersion))
-	if err != nil {
-		db.txManager.Reject(transactions, fmt.Errorf("Database: failed to setup commit: %w", err))
-		return
+	latestUnreachableVersion := db.txManager.LatestUnreachableVersion(db.syncedVersion)
+	manager := db.catalog(db.collectReleasedPages(latestUnreachableVersion))
+
+	var abortedTransactions []transaction.TransactionCommit
+	var approvedTransactions []transaction.TransactionCommit
+
+	var (
+		applyResult catalog.ApplyResult
+		err         error
+	)
+	for _, transaction := range transactions {
+		if applyResult, err = manager.ApplyChangeEvents(transaction.ChangeEvents); err != nil {
+			abortedTransactions = append(abortedTransactions, transaction)
+		} else {
+			approvedTransactions = append(approvedTransactions, transaction)
+		}
 	}
 
-	approved, aborted, applyResult := db.applyTransactions(manager, transactions)
+	retiredPages := applyResult.PageChanges.RetiredPages
+	reusablePages := applyResult.PageChanges.ReusablePages
+	pagesCount := applyResult.PageChanges.PagesCount
 
 	newHeader := &DatabaseHeader{
 		root:         applyResult.Root,
 		version:      db.header.version + 1,
 		allocatedIds: db.idAllocator.Load(),
+		pagesCount:   pagesCount,
 	}
 
-	for _, commit := range approved {
-		db.wal.Append(EncodeEvent(events.NewStartTransaction()))
-		for _, event := range commit.ChangeEvents {
-			db.wal.Append(EncodeEvent(event))
-		}
-		db.wal.Append(EncodeEvent(events.NewCommitTransaction()))
+	if err := manager.Commit(db.serializeHeader(newHeader)); err != nil {
+		db.txManager.Reject(transactions, fmt.Errorf("Database: failed to commit changes: %w", err))
+		return
 	}
-	db.wal.Append(EncodeEvent(events.NewUpdateDBVersion(uint64(newHeader.version))))
 
-	walIndex, err := db.wal.Sync()
+	db.wal.appendTransactions(approvedTransactions)
+	db.wal.appendVersionUpdate(db.header.version + 1)
+
+	walIndex, err := db.wal.sync()
 	if err != nil {
 		db.txManager.Reject(transactions, fmt.Errorf("Database: WAL flush failed: %w", err))
 		return
 	}
 	newHeader.walIndex = walIndex
 
-	if err = db.persistCommit(fl, pg, manager, applyResult, newHeader, uint64(latestUnreachableVersion), uint64(db.header.version)); err != nil {
-		db.txManager.Reject(transactions, fmt.Errorf("Database: failed to persist commit: %w", err))
-		return
-	}
+	db.txManager.Approve(approvedTransactions)
+	db.txManager.Reject(abortedTransactions, errors.New("Database: transaction aborted due to conflicts with other transactions"))
 
-	db.txManager.Approve(approved)
-	db.txManager.Reject(aborted, errors.New("Database: transaction aborted due to conflicts with other transactions"))
+	db.releasePages(latestUnreachableVersion, reusablePages)
+	db.releasePages(db.header.version, retiredPages)
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
